@@ -30,6 +30,7 @@ data/raw/*
 data/processed/validation/*
 data/processed/testing/*
 data/processed/training/*
+models/*
 
 # Logging
 private.yaml

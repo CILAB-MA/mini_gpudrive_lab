@@ -17,6 +17,7 @@ from tqdm import tqdm
 # GPUDrive
 from pygpudrive.env.config import EnvConfig, RenderConfig
 from baselines.il.config import BehavCloningConfig
+from baselines.il.util import EarlyStopping, ExpertDataset, make_dataset
 from algorithms.il.model.bc import *
 
 def parse_args():
@@ -28,57 +29,45 @@ def parse_args():
     parser.add_argument('--action-scale', '-as', type=int, default=100)
     parser.add_argument('--num-stack', '-s', type=int, default=5)
     parser.add_argument('--data-path', '-dp', type=str, default='/data')
-    parser.add_argument('--data-file', '-df', type=str, default='new_train_trajectory_1000.npz')
+    parser.add_argument('--model-path', '-p', type=str, default='/data')
     args = parser.parse_args()
     return args
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
 
 if __name__ == "__main__":
     args = parse_args()
     # Configurations
     env_config = EnvConfig(
         dynamics_model=args.dynamics_model,
-        steer_actions = torch.round(torch.linspace(-0.3, 0.3, 7) * 1000) / 1000,
-        accel_actions = torch.round(torch.linspace(-6.0, 6.0, 7) * 1000) / 1000,
-        dx = torch.round(torch.linspace(-6.0, 6.0, 100) * 1000) / 1000,
-        dy = torch.round(torch.linspace(-6.0, 6.0, 100) * 1000) / 1000,
-        dyaw = torch.round(torch.linspace(-3.14, 3.14, 300) * 1000) / 1000,
     )
     render_config = RenderConfig()
     bc_config = BehavCloningConfig()
 
-    # Get state action pairs
-    expert_obs, expert_actions = [], []
-    with np.load(os.path.join(args.data_path, args.data_file)) as npz:
-        expert_obs.append(npz['obs'])
-        expert_actions.append(npz['actions'])
-    expert_obs = np.concatenate(expert_obs)
-    expert_actions = np.concatenate(expert_actions)
-    print(f'OBS SHAPE {expert_obs.shape} ACTIONS SHAPE {expert_actions.shape}')
+    # Load expert data
+    train_obs, train_actions = make_dataset(args.data_path)
+    dataset = ExpertDataset(train_obs, train_actions)
+    train_size = int(0.8 * len(dataset))
+    valid_size = len(dataset) - train_size
+    train_dataset, valid_dataset = torch.utils.data.random_split(dataset, [train_size, valid_size])
 
-    class ExpertDataset(torch.utils.data.Dataset):
-        def __init__(self, obs, actions):
-            self.obs = obs
-            self.actions = actions
-
-        def __len__(self):
-            return len(self.obs)
-
-        def __getitem__(self, idx):
-            return self.obs[idx], self.actions[idx]
-
-    # Make dataloader
-    expert_dataset = ExpertDataset(expert_obs, expert_actions)
-    expert_data_loader = DataLoader(
-        expert_dataset,
+    # Set dataloader
+    train_dataloader = DataLoader(
+        train_dataset,
         batch_size=bc_config.batch_size,
-        shuffle=True,  # Break temporal structure
+        shuffle=True,
     )
+    valid_dataloader = DataLoader(
+        valid_dataset,
+        batch_size=bc_config.batch_size,
+        shuffle=True,
+    )
+    
 
     # # Build model
     bc_policy = ContFeedForwardMSE(
-        input_size=expert_obs.shape[-1],
+        input_size=train_obs.shape[-1],
         hidden_size=bc_config.hidden_size,
         output_size=3,
     ).to(args.device)
@@ -89,65 +78,92 @@ if __name__ == "__main__":
     # Logging
     with open("private.yaml") as f:
         private_info = yaml.load(f, Loader=yaml.FullLoader)
-    wandb.login(key=private_info["wandb_key"])
+    wandb.login(key=private_info["my_wandb_key"])
     currenttime = datetime.now().strftime("%Y%m%d%H%M%S")
-    run_id = f"{type(bc_policy).__name__}_{currenttime}"
+    cluster_path = os.path.basename(os.path.dirname(args.data_path))
+    run_id = f"{type(bc_policy).__name__}_{currenttime}_{cluster_path}"
     wandb.init(
-        project=private_info['main_project'],
-        entity=private_info['entity'],
+        project=private_info['my_project'],
+        entity=private_info['my_entity'],
         name=run_id,
         id=run_id,
         group=f"{env_config.dynamics_model}_{args.action_type}",
         config={**bc_config.__dict__, **env_config.__dict__},
     )
-    
     wandb.config.update({
         'lr': bc_config.lr,
         'batch_size': bc_config.batch_size,
         'num_stack': args.num_stack,
-        'num_scene': expert_actions.shape[0],
         'num_vehicle': 128
     })
     
+    # Early stopping
+    early_stopping = EarlyStopping(patience=5, min_delta=0.01, verbose=True)
+    
     global_step = 0
     for epoch in tqdm(range(bc_config.epochs), desc="Epochs"):
-        for i, (obs, expert_action) in enumerate(expert_data_loader):
-
+        bc_policy.train()
+        for i, (obs, expert_action) in enumerate(train_dataloader):
             obs, expert_action = obs.to(args.device), expert_action.to(
                 args.device
             )
 
             # # Forward pass
             pred_action = bc_policy(obs)
-            # mu, vars, mixed_weights = bc_policy(obs)
-            # log_prob = bc_policy._log_prob(obs, expert_action)
-            # loss = -log_prob
-            loss = F.smooth_l1_loss(pred_action, expert_action * args.action_scale)
-            # loss = gmm_loss(mu, vars, mixed_weights, expert_actions)
+            loss = F.mse_loss(pred_action, expert_action)
+            # loss = F.smooth_l1_loss(pred_action, expert_action)
+            action_loss = torch.abs(pred_action - expert_action)
+            
             # Backward pass
-            with torch.no_grad():
-                pred_action = bc_policy(obs)
-                action_loss = torch.abs(pred_action - expert_action * args.action_scale) / args.action_scale
-                dx_loss = action_loss[:, 0].mean().item()
-                dy_loss = action_loss[:, 1].mean().item()
-                dyaw_loss = action_loss[:, 2].mean().item()
-
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             wandb.log(
                 {
-                    "global_step": global_step,
-                    "loss": loss.item(),
-                    "dx_loss":dx_loss,
-                    "dy_loss":dy_loss,
-                    "dyaw_loss":dyaw_loss,
+                    "train/global_step": global_step,
+                    "train/loss": loss.item(),
+                    "train/dx_loss":action_loss[:, 0].mean().item(),
+                    "train/dy_loss":action_loss[:, 1].mean().item(),
+                    "train/dyaw_loss":action_loss[:, 2].mean().item(),
                 }
             )
-
             global_step += 1
+
+        bc_policy.eval()
+        val_loss = 0.0
+        val_dx_loss = 0.0
+        val_dy_loss = 0.0
+        val_dyaw_loss = 0.0
+        with torch.no_grad():
+            for obs, expert_action in valid_dataloader:
+                obs, expert_action = obs.to(args.device), expert_action.to(args.device)
+                pred_action = bc_policy(obs)
+                val_loss += F.mse_loss(pred_action, expert_action).item()
+                val_dx_loss += torch.abs(pred_action - expert_action)[:, 0].mean().item()
+                val_dy_loss += torch.abs(pred_action - expert_action)[:, 1].mean().item()
+                val_dyaw_loss += torch.abs(pred_action - expert_action)[:, 2].mean().item()
+                
+        val_loss /= len(valid_dataloader)
+        val_dx_loss /= len(valid_dataloader)
+        val_dy_loss /= len(valid_dataloader)
+        val_dyaw_loss /= len(valid_dataloader)
+        wandb.log(
+            {
+                "valid/epoch": epoch,
+                "valid/loss": val_loss,
+                "valid/dx_loss": val_dx_loss,
+                "valid/dy_loss": val_dy_loss,
+                "valid/dyaw_loss": val_dyaw_loss,
+            }
+        ) 
+        
+        # Early stopping check
+        early_stopping(val_loss)
+        if early_stopping.early_stop:
+            break
+        
 
     # Save policy
     if bc_config.save_model:
-        torch.save(bc_policy, f"{bc_config.model_path}/{args.model_name}.pth")
+        torch.save(bc_policy, f"{args.model_path}/{args.model_name}.pth")
