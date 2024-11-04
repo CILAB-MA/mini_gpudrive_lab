@@ -97,6 +97,15 @@ if __name__ == "__main__":
             break
     expert_obs = np.concatenate(expert_obs)
     expert_actions = np.concatenate(expert_actions)
+
+    # Omit agent_id from observation
+    num_stack = 5
+    omit_idx = 7
+    batch_size = expert_obs.shape[0]
+    reshaped_obs = expert_obs.reshape(batch_size, num_stack, -1)
+    omited_obs = np.concatenate([reshaped_obs[:, :, :omit_idx], reshaped_obs[:, :, omit_idx+1:]], axis=-1)
+    expert_obs = omited_obs.reshape(batch_size, -1)
+
     print(f'OBS SHAPE {expert_obs.shape} ACTIONS SHAPE {expert_actions.shape}')
 
     # Make dataloader
