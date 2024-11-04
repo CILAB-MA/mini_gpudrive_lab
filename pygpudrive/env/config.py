@@ -98,6 +98,12 @@ class EnvConfig:
     dist_to_goal_threshold: float = (
         3.0  # Radius around goal considered as "goal achieved"
     )
+    
+    max_num_agents_in_scene: int = 128
+    max_num_rg_points: int = 6000
+    roadgraph_top_k: int = 200
+    episode_len: int = 91
+    num_lidar_samples: int = 30
 
 
 class SelectionDiscipline(Enum):
