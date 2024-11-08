@@ -41,14 +41,22 @@ class ContFeedForward(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super(ContFeedForward, self).__init__()
         self.nn = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.Tanh(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.Tanh(),
+            nn.Linear(input_size, hidden_size[0]),
+            nn.ReLU(),
+            nn.Linear(hidden_size[0], hidden_size[1]),
+            nn.ReLU(),
+            nn.Linear(hidden_size[1], hidden_size[1]),
+            nn.ReLU(),
         )
-        self.log_std = nn.Parameter(torch.zeros(3))
-        self.heads = nn.ModuleList([nn.Linear(hidden_size, output_size)])
-
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_size[1], hidden_size[1]),
+                nn.ReLU(),
+                nn.Linear(hidden_size[1], 1),
+            )
+            for _ in range(output_size)
+        ])
+        self.log_std = nn.Parameter(torch.zeros(output_size))
 
     def dist(self, obs):
         """Generate action distribution."""
@@ -76,22 +84,13 @@ class ContFeedForwardMSE(nn.Module):
         self.nn = nn.Sequential(
             nn.Linear(input_size, hidden_size[0]),
             nn.ReLU(),
-            nn.Linear(hidden_size[0], hidden_size[0]),
-            nn.ReLU(),
-            nn.Linear(hidden_size[0], hidden_size[0]),
-            nn.ReLU(),
             nn.Linear(hidden_size[0], hidden_size[1]),
             nn.ReLU(),
             nn.Linear(hidden_size[1], hidden_size[1]),
             nn.ReLU(),
-            nn.Linear(hidden_size[1], hidden_size[1]),
-            nn.ReLU(),
         )
-        # self.heads = nn.Linear(hidden_size[1], output_size)
         self.heads = nn.ModuleList([
             nn.Sequential(
-                nn.Linear(hidden_size[1], hidden_size[1]),
-                nn.ReLU(),
                 nn.Linear(hidden_size[1], hidden_size[1]),
                 nn.ReLU(),
                 nn.Linear(hidden_size[1], 1),
@@ -102,7 +101,5 @@ class ContFeedForwardMSE(nn.Module):
     def forward(self, obs, deterministic=False):
         """Generate an output from tensor input."""
         nn = self.nn(obs)
-        # actions = self.heads(nn)
         actions = torch.cat([head(nn) for head in self.heads], dim=-1)
-        actions = actions  #  * torch.tensor([0.001, 100.0, 100.0]).to(obs.device)
         return actions
