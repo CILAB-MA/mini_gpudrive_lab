@@ -74,7 +74,10 @@ class ContFeedForward(nn.Module):
 
     def _log_prob(self, obs, expert_actions):
         pred_action_dist = self.dist(obs)
-        log_prob = torch.cat([dist.log_prob(expert_actions) for dist in pred_action_dist], dim=-1).mean()
+        log_prob = torch.cat([
+            dist.log_prob(action.unsqueeze(-1))
+            for action, dist in zip(expert_actions.T, pred_action_dist)
+        ], dim=-1).sum()
         return log_prob
 
 # Define network

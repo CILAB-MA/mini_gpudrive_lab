@@ -6,13 +6,11 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 import os, sys
 sys.path.append(os.getcwd())
-import wandb, yaml, argparse
-from datetime import datetime
+import argparse
 import numpy as np
 from tqdm import tqdm
 
 # GPUDrive
-from pygpudrive.env.config import EnvConfig
 from baselines.il.config import BehavCloningConfig
 from algorithms.il.model.bc import *
 
@@ -64,14 +62,6 @@ if __name__ == "__main__":
     args = parse_args()
 
     # Configurations
-    env_config = EnvConfig(
-        dynamics_model=args.dynamics_model,
-        steer_actions=torch.round(torch.linspace(-0.3, 0.3, 7) * 1000) / 1000,
-        accel_actions=torch.round(torch.linspace(-6.0, 6.0, 7) * 1000) / 1000,
-        dx=torch.round(torch.linspace(-6.0, 6.0, 100) * 1000) / 1000,
-        dy=torch.round(torch.linspace(-6.0, 6.0, 100) * 1000) / 1000,
-        dyaw=torch.round(torch.linspace(-3.14, 3.14, 300) * 1000) / 1000,
-    )
     bc_config = BehavCloningConfig()
 
     # Get state action pairs
@@ -121,31 +111,8 @@ if __name__ == "__main__":
     # Configure loss and optimizer
     optimizer = Adam(model.parameters(), lr=bc_config.lr)
 
-    # Logging
-    if args.use_wandb:
-        with open("private.yaml") as f:
-            private_info = yaml.load(f, Loader=yaml.FullLoader)
-        wandb.login(key=private_info["wandb_key"])
-        currenttime = datetime.now().strftime("%Y%m%d%H%M%S")
-        run_id = f"{type(model).__name__}_{currenttime}"
-        wandb.init(
-            project=private_info['main_project'],
-            entity=private_info['entity'],
-            name=run_id,
-            id=run_id,
-            group=f"{env_config.dynamics_model}_{args.action_type}",
-            config={**bc_config.__dict__, **env_config.__dict__},
-        )
-        wandb.config.update({
-            'lr': bc_config.lr,
-            'batch_size': bc_config.batch_size,
-            'num_stack': args.num_stack,
-            'num_scene': expert_actions.shape[0],
-            'num_vehicle': 128
-        })
-
     train_losses, eval_losses = [], []
-    for epoch in range(500):
+    for epoch in range(bc_config.epochs):
         model.train()
         for i, (obs, expert_action) in enumerate(train_dataloader):
             obs, expert_action = obs.to(args.device), expert_action.to(args.device)
@@ -163,14 +130,6 @@ if __name__ == "__main__":
             # Calculate metrics
             with torch.no_grad():
                 action_loss = torch.abs(pred_action - expert_action).mean(dim=0)
-            if args.use_wandb:
-                wandb.log({
-                    "global_step": epoch * len(train_dataloader) + i,
-                    "loss": loss.item(),
-                    "dx_loss": action_loss[0].item(),
-                    "dy_loss": action_loss[1].item(),
-                    "dyaw_loss": action_loss[2].item(),
-                })
 
         eval_loss = evaluate(model, valid_dataloader, args.device)
 
@@ -189,8 +148,10 @@ if __name__ == "__main__":
     for i, ax in enumerate(axes):
         ax.plot(train_losses[:, i], label='train')
         ax.plot(eval_losses[:, i], label='eval')
+        ax.set_ylim(0, min(0.2, np.max(eval_losses[:, i])))
         ax.set_title(['dx', 'dy', 'dyaw'][i])
         ax.legend()
+    fig.suptitle(f"{model.__class__.__name__} in {args.scene_count} scenes")
     plt.show()
 
     # Save policy
