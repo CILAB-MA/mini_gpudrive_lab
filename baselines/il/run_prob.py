@@ -25,7 +25,7 @@ def parse_args():
     parser.add_argument('--action-type', '-at', type=str, default='continuous', choices=['discrete', 'multi_discrete', 'continuous'])
     parser.add_argument('--device', '-d', type=str, default='cuda', choices=['cpu', 'cuda'])
     parser.add_argument('--model-name', '-m', type=str, default='bc_policy')
-    parser.add_argument('--action-scale', '-as', type=int, default=100)
+    parser.add_argument('--action-scale', '-as', type=int, default=50)
     parser.add_argument('--num-stack', '-s', type=int, default=5)
     parser.add_argument('--data-path', '-dp', type=str, default='/data')
     parser.add_argument('--scene-count', '-c', type=int, default=1)
@@ -47,13 +47,13 @@ class ExpertDataset(torch.utils.data.Dataset):
 
 
 @torch.no_grad()
-def evaluate(model, dataloader, device):
+def evaluate(model, dataloader, device, action_scale):
     model.eval()
     total_loss = []
     for obs, expert_action in dataloader:
         obs, expert_action = obs.to(device), expert_action.to(device)
         pred_action = model(obs, deterministic=True)
-        action_loss = torch.abs(pred_action - expert_action).mean(dim=0)
+        action_loss = torch.abs(pred_action - expert_action * action_scale).mean(dim=0) / action_scale
         total_loss.append(action_loss)
     return torch.stack(total_loss).mean(dim=0)
 
@@ -121,7 +121,7 @@ if __name__ == "__main__":
             pred_action = model(obs)
 
             # Calculate loss
-            loss = -model._log_prob(obs, expert_action)
+            loss = -model._log_prob(obs, expert_action * args.action_scale)
 
             optimizer.zero_grad()
             loss.backward()
@@ -129,9 +129,9 @@ if __name__ == "__main__":
 
             # Calculate metrics
             with torch.no_grad():
-                action_loss = torch.abs(pred_action - expert_action).mean(dim=0)
+                action_loss = torch.abs(pred_action - expert_action * args.action_scale).mean(dim=0) / args.action_scale
 
-        eval_loss = evaluate(model, valid_dataloader, args.device)
+        eval_loss = evaluate(model, valid_dataloader, args.device, args.action_scale)
 
         # Print results
         print(f"Epoch {epoch}: "
@@ -157,4 +157,4 @@ if __name__ == "__main__":
     # Save policy
     if bc_config.save_model:
         os.makedirs(bc_config.model_path, exist_ok=True)
-        torch.save(model, f"{bc_config.model_path}/{args.model_name}.pth")
+        torch.save(model, f"{bc_config.model_path}/{args.model_name}_{model.__class__.__name__}_x{args.action_scale}.pth")
