@@ -4,6 +4,7 @@
 import logging
 from torch.optim import Adam
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import os, sys
 sys.path.append(os.getcwd())
 import argparse
@@ -26,6 +27,7 @@ def parse_args():
     parser.add_argument('--device', '-d', type=str, default='cuda', choices=['cpu', 'cuda'])
     parser.add_argument('--model-name', '-m', type=str, default='bc_policy')
     parser.add_argument('--action-scale', '-as', type=int, default=50)
+    parser.add_argument('--lr-schedule', '-ls', type=str, default=None, choices=[None, 'plateau'])
     parser.add_argument('--num-stack', '-s', type=int, default=5)
     parser.add_argument('--data-path', '-dp', type=str, default='/data')
     parser.add_argument('--scene-count', '-c', type=int, default=1)
@@ -110,6 +112,12 @@ if __name__ == "__main__":
 
     # Configure loss and optimizer
     optimizer = Adam(model.parameters(), lr=bc_config.lr)
+    if args.lr_schedule is None:
+        scheduler = type('DummyScheduler', (), {'step': lambda self, metrics: None})()
+    elif args.lr_schedule == 'plateau':
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=100, verbose=True)
+    else:
+        raise ValueError(f"Invalid lr schedule: {args.lr_schedule}")
 
     train_losses, eval_losses = [], []
     for epoch in range(bc_config.epochs):
@@ -132,6 +140,11 @@ if __name__ == "__main__":
                 action_loss = torch.abs(pred_action - expert_action * args.action_scale).mean(dim=0) / args.action_scale
 
         eval_loss = evaluate(model, valid_dataloader, args.device, args.action_scale)
+
+        prev_lr = optimizer.param_groups[0]['lr']
+        scheduler.step(eval_loss.mean())
+        if prev_lr != optimizer.param_groups[0]['lr']:
+            print(f"Learning rate reduced to {optimizer.param_groups[0]['lr']}")
 
         # Print results
         print(f"Epoch {epoch}: "
