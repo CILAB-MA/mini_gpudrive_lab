@@ -2,35 +2,60 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class BehavCloningConfig:
-
-    # Dataset & device
-    data_dir: str = "/data"
-    device: str = "cpu"
-
-    # Number of scenarios / worlds
-    num_worlds: int = 3
-    max_cont_agents: int = 128
-
-    # Discretize actions and use action indices
-    discretize_actions: bool = True
-    use_action_indices: bool = True
-    # Record a set of trajectories as sanity check
-    make_sanity_check_video: bool = True
-
-    # Logging
-    wandb_mode: str = "online"
-    wandb_project: str = "il"
-    log_interval: int = 500
-
+class ExperimentConfig:
     # Hyperparameters
-    batch_size: int = 512
+    batch_size: int = 64
     epochs: int = 1000
-    lr: float = 3e-4
-    hidden_size: list = field(default_factory=lambda: [1024, 256])
-    net_arch: list = field(default_factory=lambda: [64, 128])
+    lr: float = 5e-4
+    sample_per_epoch: int = 50000
+    
+    # BASE LATEFUSION
+    ego_state_layers = [64, 64]
+    road_object_layers = [64, 64]
+    road_graph_layers = [64, 64]
+    shared_layers = [64, 64]
+    act_func = "tanh"
+    dropout = 0.0
+    last_layer_dim_pi = 64
+    last_layer_dim_vf = 64  
 
-    # Save policy
-    save_model: bool = True
-    model_path: str = "models/"
-    model_name: str = "bc_policy"
+    @dataclass
+    class FeedForwardConfig:
+        hidden_size: list = field(default_factory=lambda: [1024, 256])
+        net_arch: list = field(default_factory=lambda: [64, 128])
+    
+    @dataclass
+    class LatefusionConfig:
+        #TODO: latefusion network hyperparameters
+        NotImplemented
+
+    @dataclass
+    class LatefusionAttnConfig:
+        #TODO: latefusion attention network hyperparameters
+        NotImplemented
+    
+    @dataclass
+    class WayformerConfig:
+        #TODO: wayformer network hyperparameters
+        NotImplemented
+    
+    @dataclass
+    class ContHeadConfig:
+        #TODO: conthead hyperparameters
+        NotImplemented 
+    
+    @dataclass
+    class GmmHeadConfig:
+        hidden_dim: int = 128
+        action_dim: int = 3
+        n_components: int = 10
+        
+    # Sub-configurations
+    feedforward: FeedForwardConfig = field(default_factory=FeedForwardConfig)
+    latefusion: LatefusionConfig = field(default_factory=LatefusionConfig)
+    latefusion_attn: LatefusionAttnConfig = field(default_factory=LatefusionAttnConfig)
+    wayformer: WayformerConfig = field(default_factory=WayformerConfig)  
+    
+    conthead: ContHeadConfig = field(default_factory=ContHeadConfig)
+    gmm: GmmHeadConfig = field(default_factory=GmmHeadConfig)
+    
