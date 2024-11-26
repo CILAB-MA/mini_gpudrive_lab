@@ -81,6 +81,56 @@ class ContFeedForward(nn.Module):
         return log_prob
 
 # Define network
+class ContSharedFeedForward(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, num_stack):
+        super(ContSharedFeedForward, self).__init__()
+        self.num_stack = num_stack
+        self.encoder = nn.Sequential(
+            nn.Linear(input_size // num_stack, hidden_size[0] // num_stack),
+            nn.ReLU(),
+        )
+        self.nn = nn.Sequential(
+            nn.Linear(hidden_size[0] // num_stack * num_stack, hidden_size[1]),
+            nn.ReLU(),
+            nn.Linear(hidden_size[1], hidden_size[1]),
+            nn.ReLU(),
+        )
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_size[1], hidden_size[1]),
+                nn.ReLU(),
+                nn.Linear(hidden_size[1], 1),
+            )
+            for _ in range(output_size)
+        ])
+        self.log_std = nn.Parameter(torch.zeros(output_size))
+
+    def dist(self, obs):
+        """Generate action distribution."""
+        reshaped_obs = obs.view(obs.size(0), self.num_stack, -1)
+        encoded_obs = self.encoder(reshaped_obs)
+        concatenated_obs = encoded_obs.view(obs.size(0), -1)
+        x_out = self.nn(concatenated_obs)
+        return [Normal(head(x_out), torch.exp(std)) for head, std in zip(self.heads, self.log_std)]
+
+    def forward(self, obs, deterministic=False):
+        """Generate an output from tensor input."""
+        action_dist = self.dist(obs)
+        if deterministic:
+            actions_idx = torch.cat([dist.mean for dist in action_dist], dim=-1)
+        else:
+            actions_idx = torch.cat([dist.sample() for dist in action_dist], dim=-1)
+        return actions_idx
+
+    def _log_prob(self, obs, expert_actions):
+        pred_action_dist = self.dist(obs)
+        log_prob = torch.cat([
+            dist.log_prob(action.unsqueeze(-1))
+            for action, dist in zip(expert_actions.T, pred_action_dist)
+        ], dim=-1).sum()
+        return log_prob
+
+# Define network
 class ContFeedForwardMSE(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super(ContFeedForwardMSE, self).__init__()
@@ -104,5 +154,38 @@ class ContFeedForwardMSE(nn.Module):
     def forward(self, obs, deterministic=False):
         """Generate an output from tensor input."""
         nn = self.nn(obs)
+        actions = torch.cat([head(nn) for head in self.heads], dim=-1)
+        return actions
+
+# Define network
+class ContSharedFeedForwardMSE(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, num_stack):
+        super(ContSharedFeedForwardMSE, self).__init__()
+        self.num_stack = num_stack
+        self.encoder = nn.Sequential(
+            nn.Linear(input_size // num_stack, hidden_size[0] // num_stack),
+            nn.ReLU(),
+        )
+        self.nn = nn.Sequential(
+            nn.Linear(hidden_size[0] // num_stack * num_stack, hidden_size[1]),
+            nn.ReLU(),
+            nn.Linear(hidden_size[1], hidden_size[1]),
+            nn.ReLU(),
+        )
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_size[1], hidden_size[1]),
+                nn.ReLU(),
+                nn.Linear(hidden_size[1], 1),
+            )
+            for _ in range(output_size)
+        ])
+
+    def forward(self, obs, deterministic=False):
+        """Generate an output from tensor input."""
+        reshaped_obs = obs.view(obs.size(0), self.num_stack, -1)
+        encoded_obs = self.encoder(reshaped_obs)
+        concatenated_obs = encoded_obs.view(obs.size(0), -1)
+        nn = self.nn(concatenated_obs)
         actions = torch.cat([head(nn) for head in self.heads], dim=-1)
         return actions

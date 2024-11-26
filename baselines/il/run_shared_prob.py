@@ -54,7 +54,7 @@ def evaluate(model, dataloader, device, action_scale):
     total_loss = []
     for obs, expert_action in dataloader:
         obs, expert_action = obs.to(device), expert_action.to(device)
-        pred_action = model(obs, deterministic=True)
+        pred_action = model(obs)
         action_loss = torch.abs(pred_action - expert_action * action_scale).mean(dim=0) / action_scale
         total_loss.append(action_loss)
     return torch.stack(total_loss).mean(dim=0)
@@ -70,6 +70,7 @@ if __name__ == "__main__":
     expert_obs, expert_actions = [], []
     for file_name in tqdm(os.listdir(args.data_path), total=args.scene_count, desc="Loading data"):
         file_path = os.path.join(args.data_path, file_name)
+        print("loading file: ", file_path)
         with np.load(file_path) as npz:
             expert_obs.append(npz['obs'])
             expert_actions.append(npz['actions'])
@@ -104,10 +105,11 @@ if __name__ == "__main__":
     )
 
     # Build model
-    model = ContFeedForward(
+    model = ContSharedFeedForward(
         input_size=expert_obs.shape[-1],
         hidden_size=bc_config.hidden_size,
         output_size=expert_actions.shape[-1],
+        num_stack=5,
     ).to(args.device)
 
     # Configure loss and optimizer
