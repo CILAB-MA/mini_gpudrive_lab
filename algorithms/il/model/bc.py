@@ -5,6 +5,9 @@ from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
 import torch.nn.functional as F
 
+import math
+
+# Define network
 class FeedForward(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super(FeedForward, self).__init__()
@@ -188,4 +191,92 @@ class ContSharedFeedForwardMSE(nn.Module):
         concatenated_obs = encoded_obs.view(obs.size(0), -1)
         nn = self.nn(concatenated_obs)
         actions = torch.cat([head(nn) for head in self.heads], dim=-1)
+        return actions
+
+# Define network
+class ContFeedForwardConv1D(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(ContFeedForwardConv1D, self).__init__()
+        
+        # Define Conv1d layers
+        self.conv_nn = nn.Sequential(
+            nn.Conv1d(1, hidden_size[0], kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(hidden_size[0], hidden_size[1], kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(hidden_size[1], hidden_size[1], kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+        )
+
+        # Compute the output size of the conv layers
+        conv_output_size = self.calculate_conv_output_size(input_size, 3, 1, 1)
+
+        # Define output heads using conv_output_size
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_size[1] * conv_output_size, 128),
+                nn.ReLU(),
+                nn.Linear(128, 1),
+            )
+            for _ in range(output_size)
+        ])
+
+    def calculate_conv_output_size(self, input_size, kernel_size, stride, padding):
+        return math.floor((input_size + 2 * padding - kernel_size) / stride + 1)
+
+    def forward(self, obs, deterministic=False):
+        obs = obs.unsqueeze(1)  # Add channel dimension
+        conv_out = self.conv_nn(obs)  # Shape: (batch_size, hidden_size[1], sequence_length)
+        conv_out_flat = conv_out.view(conv_out.size(0), -1)  # Flatten for Linear layers
+        actions = torch.cat([head(conv_out_flat) for head in self.heads], dim=-1)
+        return actions
+    
+# Define network
+class ContFeedForwardConv2D(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        """
+        input_size: Tuple (sequence_length, stack_num, feature)
+        hidden_size: List of hidden channel sizes for Conv2D layers
+        output_size: Number of output heads
+        """
+        super(ContFeedForwardConv2D, self).__init__()
+        
+        sequence_length, stack_num, feature = input_size
+
+        # Define the 2D convolutional backbone
+        self.conv_nn = nn.Sequential(
+            nn.Conv2d(stack_num, hidden_size[0], kernel_size=(3, 3), stride=1, padding=1),  # Conv layer 1
+            nn.ReLU(),
+            nn.Conv2d(hidden_size[0], hidden_size[1], kernel_size=(3, 3), stride=1, padding=1),  # Conv layer 2
+            nn.ReLU(),
+            nn.Conv2d(hidden_size[1], hidden_size[1], kernel_size=(3, 3), stride=1, padding=1),  # Conv layer 3
+            nn.ReLU(),
+        )
+
+        # Calculate the output size after Conv2D
+        self.flattened_size = hidden_size[1] * sequence_length * feature
+
+        # Define output heads
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(self.flattened_size, hidden_size[1]),
+                nn.ReLU(),
+                nn.Linear(hidden_size[1], 1),
+            )
+            for _ in range(output_size)
+        ])
+
+    def forward(self, obs, deterministic=False):
+        """
+        Generate an output from tensor input.
+        Assumes obs is of shape [batch_size, stack_num, sequence_length, feature].
+        """
+        # Pass through Conv2D layers
+        conv_out = self.conv_nn(obs)  # Shape: (batch_size, hidden_channels, sequence_length, feature)
+        
+        # Flatten for fully connected layers
+        conv_out_flat = conv_out.view(conv_out.size(0), -1)  # Shape: (batch_size, flattened_size)
+        
+        # Generate outputs for all heads
+        actions = torch.cat([head(conv_out_flat) for head in self.heads], dim=-1)
         return actions
