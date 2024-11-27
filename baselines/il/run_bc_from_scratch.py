@@ -206,7 +206,7 @@ if __name__ == "__main__":
         dyaw_losses = 0
         for i, (obs, expert_action) in enumerate(eval_expert_data_loader):
             batch_size = obs.size(0)
-            if total_samples + batch_size > int(exp_config.sample_per_epoch):  # Check if adding this batch exceeds 50,000
+            if total_samples + batch_size > int(exp_config.sample_per_epoch / 5):  # Check if adding this batch exceeds 50,000
                 break
             total_samples += batch_size
             obs, expert_action = obs.to(args.device), expert_action.to(args.device)
@@ -235,4 +235,4 @@ if __name__ == "__main__":
     # Save policy
     if not os.path.exists(args.model_path):
         os.makedirs(args.model_path)
-    torch.save(bc_policy, f"{args.model_path}/{args.model_name}_{args.exp_name}_{datetime.now().strftime("%m%d%H%M")}.pth")
+    torch.save(bc_policy, f"{args.model_path}/{args.model_name}_{args.loss_name}_{args.exp_name}.pth")
