@@ -113,8 +113,7 @@ if __name__ == "__main__":
     ).to(args.device)
 
     # Configure loss and optimizer
-    # optimizer = Adam(model.parameters(), lr=bc_config.lr)
-    optimizer = Adam(model.parameters(), lr=5e-5)
+    optimizer = Adam(model.parameters(), lr=bc_config.lr)
     if args.lr_schedule is None:
         scheduler = type('DummyScheduler', (), {'step': lambda self, metrics: None})()
     elif args.lr_schedule == 'plateau':
