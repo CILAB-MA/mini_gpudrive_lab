@@ -1,3 +1,4 @@
+
 """Obtain a policy using behavioral cloning."""
 
 # Torch
@@ -70,7 +71,6 @@ if __name__ == "__main__":
     expert_obs, expert_actions = [], []
     for file_name in tqdm(os.listdir(args.data_path), total=args.scene_count, desc="Loading data"):
         file_path = os.path.join(args.data_path, file_name)
-        print("loading file: ", file_path)
         with np.load(file_path) as npz:
             expert_obs.append(npz['obs'])
             expert_actions.append(npz['actions'])
@@ -105,16 +105,28 @@ if __name__ == "__main__":
     )
 
     # Build model
-    model = ContSharedFeedForwardMSE(
-        input_size=expert_obs.shape[-1],
-        hidden_size=bc_config.hidden_size,
-        output_size=expert_actions.shape[-1],
-        num_stack=5,
+    model = ContSharedLateFusionMSE(
+        env_config={
+            "ego_state": True,
+            "partner_obs": True,
+            "road_map_obs": True,
+            "max_num_agents_in_scene": 128,
+            "roadgraph_top_k": 200,
+            "num_stack": args.num_stack,
+        },
+        net_config={
+            "ego_state_layers": [64, 32],
+            "road_object_layers": [64, 32],
+            "road_graph_layers": [64, 32],
+            "shared_layers": [64, 64],
+            "act_func": "relu",
+            "dropout": 0.0,
+            "last_layer_dim_pi": 3,
+        },
     ).to(args.device)
 
     # Configure loss and optimizer
-    # optimizer = Adam(model.parameters(), lr=bc_config.lr)
-    optimizer = Adam(model.parameters(), lr=5e-5)
+    optimizer = Adam(model.parameters(), lr=bc_config.lr)
     if args.lr_schedule is None:
         scheduler = type('DummyScheduler', (), {'step': lambda self, metrics: None})()
     elif args.lr_schedule == 'plateau':
