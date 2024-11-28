@@ -9,6 +9,7 @@ MODELS = dict(bc=ContFeedForward, late_fusion=LateFusionBCNet,
 LOSS = dict(
     l1=l1_loss, 
     mse=mse_loss,
-    twohot=two_hot_loss, 
+    twohot=two_hot_loss,
+    nll=nll_loss,
     gmm=gmm_loss
 )
