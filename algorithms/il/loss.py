@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch.distributions import Normal
 from torch.distributions.multivariate_normal import MultivariateNormal
+import numpy as np
 
 def l1_loss(model, obs, expert_actions):
     '''
@@ -64,11 +65,20 @@ def two_hot_loss(model, obs, expert_actions):
 
 def nll_loss(model, obs, expert_actions):
     embedding_vector = model.get_embedded_obs(obs)
-    means, stds = model.head.get_dist_params(embedding_vector)
+    means, log_std = model.head.get_dist_params(embedding_vector)
+    stds = torch.exp(log_std)
 
     gaussian = Normal(means, stds)
-    log_probs = gaussian.log_prob(expert_actions)
-
+    
+    scale_factor = torch.tensor([6.0, 6.0, np.pi], device=expert_actions.device)
+    squash_expert_actions = expert_actions / scale_factor
+    squash_expert_actions = torch.clamp(squash_expert_actions, -1 + 1e-6, 1 - 1e-6)
+    
+    unsquash_expert_actions = torch.atanh(squash_expert_actions)
+    
+    log_probs = gaussian.log_prob(unsquash_expert_actions)
+    log_probs -= torch.log(1 - squash_expert_actions.pow(2) + 1e-6)
+    
     loss = -log_probs.sum(dim=-1)
 
     return loss.mean()
@@ -80,15 +90,22 @@ def gmm_loss(model, obs, expert_actions):
     embedding_vector = model.get_embedded_obs(obs)
     means, covariances, weights, components = model.head.get_gmm_params(embedding_vector)
     
+    # Rescaling actions and resquash
+    scale_factor = torch.tensor([6.0, 6.0, np.pi], device=expert_actions.device)
+    squash_expert_actions = expert_actions / scale_factor
+    squash_expert_actions = torch.clamp(squash_expert_actions, -1 + 1e-6, 1 - 1e-6)
+    
+    unsquash_expert_actions = torch.atanh(squash_expert_actions)
+    
     log_probs = []
 
     for i in range(components):
         mean = means[:, i, :]
         cov_diag = covariances[:, i, :]
         gaussian = MultivariateNormal(mean, torch.diag_embed(cov_diag))
-        log_probs.append(gaussian.log_prob(expert_actions))
+        log_probs.append(gaussian.log_prob(unsquash_expert_actions))
 
     log_probs = torch.stack(log_probs, dim=1)
-    weighted_log_probs = log_probs + torch.log(weights + 1e-8)
+    weighted_log_probs = log_probs + torch.log(weights + 1e-8) + torch.log(1 - squash_expert_actions**2 + 1e-6)
     loss = -torch.logsumexp(weighted_log_probs, dim=1)
     return loss.mean()
