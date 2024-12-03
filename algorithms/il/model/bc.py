@@ -393,9 +393,9 @@ class LateFusionAttnBCNet(LateFusionNet):
         
         return actions
 
-class WayformerEncoder(LateFusionBCNet):
-    def __init__(self, env_config, exp_config, loss='l1', num_stack=5):
-        super(WayformerEncoder, self).__init__(None, env_config, exp_config, num_stack)
+class WayformerEncoder(LateFusionNet):
+    def __init__(self, env_config, exp_config, loss='l1', num_stack=1):
+        super(WayformerEncoder, self).__init__(None, env_config, exp_config)
         self.num_stack = num_stack
         
          # Scene encoder
@@ -421,7 +421,7 @@ class WayformerEncoder(LateFusionBCNet):
             torch.zeros((1, 91, 1, 64)),
             requires_grad=True
         )
-
+        self.timestep_linear = nn.Linear(64, 91)
         self.loss_func = loss
         
         if loss in ['l1', 'mse', 'twohot']: # make head module
@@ -438,7 +438,7 @@ class WayformerEncoder(LateFusionBCNet):
             )
         elif loss == 'gmm':
             self.head = GMM(
-                input_dim=self.shared_net_input_dim,
+                input_dim=64,
                 hidden_dim=exp_config.gmm.hidden_dim,
                 action_dim=exp_config.gmm.action_dim,
                 n_components=exp_config.gmm.n_components
@@ -451,23 +451,21 @@ class WayformerEncoder(LateFusionBCNet):
         ro_size = self.ro_input_dim * self.ro_max
         rg_size = self.rg_input_dim * self.rg_max
         obs_flat_unstack = obs_flat.reshape(-1, timestep,  ego_size + ro_size + rg_size)
-        ego_stack = obs_flat_unstack[..., :ego_size].view(-1, timestep, self.ego_input_dim).reshape(-1, self.ego_input_dim)
+        ego_stack = obs_flat_unstack[..., :ego_size].view(-1, timestep, self.ego_input_dim)
         ro_stack = (
             obs_flat_unstack[..., ego_size:ego_size + ro_size]
             .view(-1, timestep, self.ro_max, self.ro_input_dim)
-            .reshape(-1, self.ro_max, self.ro_input_dim)
          )
 
         # rg_stack: Original reshape, then combine num_stack and self.rg_input_dim dimensions
         rg_stack = (
             obs_flat_unstack[..., ego_size + ro_size: ego_size + ro_size + rg_size]
             .view(-1, timestep, self.rg_max, self.rg_input_dim)
-            .reshape(-1, self.rg_max, self.rg_input_dim)
         )
 
         return ego_stack, ro_stack, rg_stack
     
-    def get_embedded_obs(self, obs, mask):
+    def get_embedded_obs(self, obs, mask=None):
         # TODO: Implement function using mask
         # Unpack observation
         ego_state, road_objects, road_graph = self._unpack_obs(obs)
@@ -476,16 +474,20 @@ class WayformerEncoder(LateFusionBCNet):
         ego_state = self.ego_state_net(ego_state)
         road_objects = self.road_object_net(road_objects)
         road_graph = self.road_graph_net(road_graph)
+        ego_state = ego_state.unsqueeze(2)
+        agent_state = torch.cat([ego_state, road_objects], dim=2)
+        agent_state = agent_state + self.agents_positional_embedding + self.temporal_positional_embedding
 
-        ego_state = ego_state.reshape(batch_size, -1, 64)
-        road_objects = road_objects.reshape(batch_size, -1, 64)
+        agent_state = ego_state.reshape(batch_size, -1, 64)
         road_graph = road_graph.reshape(batch_size, -1, 64)
 
-        embedding_vector = torch.cat((ego_state, road_objects, road_graph), dim=1)
+        embedding_vector = torch.cat((agent_state, road_graph), dim=1)
         
         context = self.encoder(embedding_vector) 
-        context = context.reshape(batch_size, -1)
-        
+        context = context.transpose(1, 2)
+        context = self.timestep_linear(context)
+        context = context.transpose(1, 2)
+
         return context    
 
     def forward(self, obss, mask):

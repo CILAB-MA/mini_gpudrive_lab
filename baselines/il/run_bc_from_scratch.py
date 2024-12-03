@@ -23,16 +23,16 @@ def parse_args():
     parser = argparse.ArgumentParser('Select the dynamics model that you use')
     parser.add_argument('--action-type', '-at', type=str, default='continuous', choices=['discrete', 'multi_discrete', 'continuous'],)
     parser.add_argument('--device', '-d', type=str, default='cuda', choices=['cpu', 'cuda'],)
-    parser.add_argument('--num-stack', '-s', type=int, default=5)
+    parser.add_argument('--num-stack', '-s', type=int, default=1)
     
     # MODEL
     parser.add_argument('--model-path', '-mp', type=str, default='/data/model')
-    parser.add_argument('--model-name', '-m', type=str, default='bc', choices=['bc', 'late_fusion', 'attention', 'wayformer'])
-    parser.add_argument('--loss-name', '-l', type=str, default='l1', choices=['l1', 'mse', 'twohot', 'nll', 'gmm'])
+    parser.add_argument('--model-name', '-m', type=str, default='wayformer', choices=['bc', 'late_fusion', 'attention', 'wayformer'])
+    parser.add_argument('--loss-name', '-l', type=str, default='gmm', choices=['l1', 'mse', 'twohot', 'nll', 'gmm'])
     parser.add_argument('--action-scale', '-as', type=int, default=1)
     
     # DATA
-    parser.add_argument('--data-path', '-dp', type=str, default='/data/trajectories/stack5')
+    parser.add_argument('--data-path', '-dp', type=str, default='/data/wayformer')
     parser.add_argument('--train-data-file', '-td', type=str, default='train_trajectory_1000.npz')
     parser.add_argument('--eval-data-file', '-ed', type=str, default='test_trajectory_200.npz')
     
@@ -47,18 +47,27 @@ class ExpertDataset(torch.utils.data.Dataset):
         self.obs = obs
         self.actions = actions
         self.masks = masks
-
+        self.use_mask = False
         if self.masks is not None:
-            valid_indices = self.masks.flatten() == 0
-            self.obs = self.obs.reshape(-1, self.obs.shape[-1])[valid_indices]
-            self.actions = self.actions.reshape(-1, self.actions.shape[-1])[valid_indices]
+            self.use_mask = True
+            if len(self.obs.shape) == 3:
+                valid_indices = self.masks[..., None]
+                self.obs = self.obs * valid_indices
+                self.actions = self.actions * valid_indices
+            else:
+                valid_indices = self.masks.flatten() == 0
+                self.obs = self.obs.reshape(-1, self.obs.shape[-1])[valid_indices]
+                self.actions = self.actions.reshape(-1, self.actions.shape[-1])[valid_indices]
 
 
     def __len__(self):
         return len(self.obs)
 
     def __getitem__(self, idx):
-        return self.obs[idx], self.actions[idx]
+        if self.use_mask:
+            return self.obs[idx], self.actions[idx], self.masks[idx]
+        else:
+            return self.obs[idx], self.actions[idx]
 
 if __name__ == "__main__":
     args = parse_args()
@@ -151,6 +160,7 @@ if __name__ == "__main__":
         'model_save_path': model_save_path})
     
     global_step = 0
+    masks = None
     for epoch in tqdm(range(exp_config.epochs), desc="Epochs", unit="epoch"):
         bc_policy.train()
         total_samples = 0
@@ -158,17 +168,23 @@ if __name__ == "__main__":
         dx_losses = 0
         dy_losses = 0
         dyaw_losses = 0
-        for i, (obs, expert_action) in enumerate(expert_data_loader):
+        for i, batch in enumerate(expert_data_loader):
+            if len(batch) == 3:
+                obs, expert_action, masks = batch
+            else:
+                obs, expert_action = batch
             batch_size = obs.size(0)
             if total_samples + batch_size > exp_config.sample_per_epoch:  # Check if adding this batch exceeds 50,000
                 break
             total_samples += batch_size
 
             obs, expert_action = obs.to(args.device), expert_action.to(args.device)
+            if len(batch) == 3:
+                masks = masks.to(args.device)
             
             # Forward pass
             expert_action *= args.action_scale
-            loss = LOSS[args.loss_name](bc_policy, obs, expert_action)
+            loss = LOSS[args.loss_name](bc_policy, obs, expert_action, masks)
             
             # Backward pass
             optimizer.zero_grad()

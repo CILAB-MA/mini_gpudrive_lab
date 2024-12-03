@@ -4,7 +4,7 @@ from algorithms.il.model.bc import *
 from algorithms.il.loss import *
 
 MODELS = dict(bc=ContFeedForward, late_fusion=LateFusionBCNet,
-              attention=LateFusionAttnBCNet, wayformer=None)
+              attention=LateFusionAttnBCNet, wayformer=WayformerEncoder)
 
 LOSS = dict(
     l1=l1_loss, 
