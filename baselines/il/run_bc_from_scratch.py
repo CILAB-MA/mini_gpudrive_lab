@@ -169,18 +169,19 @@ if __name__ == "__main__":
         dy_losses = 0
         dyaw_losses = 0
         for i, batch in enumerate(expert_data_loader):
+            # Check if adding this batch exceeds 50,000
+            batch_size = batch[0].size(0)
+            if total_samples + batch_size > exp_config.sample_per_epoch:
+                break
+            total_samples += batch_size
+            
+            # Data
             if len(batch) == 3:
                 obs, expert_action, masks = batch
             else:
                 obs, expert_action = batch
-            batch_size = obs.size(0)
-            if total_samples + batch_size > exp_config.sample_per_epoch:  # Check if adding this batch exceeds 50,000
-                break
-            total_samples += batch_size
-
             obs, expert_action = obs.to(args.device), expert_action.to(args.device)
-            if len(batch) == 3:
-                masks = masks.to(args.device)
+            masks = masks.to(args.device) if len(batch) == 3 else None
             
             # Forward pass
             expert_action *= args.action_scale
@@ -189,10 +190,10 @@ if __name__ == "__main__":
             # Backward pass
             optimizer.zero_grad()
             loss.backward()
-            optimizer.step()  # Update model parameters
+            optimizer.step()
 
             with torch.no_grad():
-                pred_actions = bc_policy(obs, deterministic=True)
+                pred_actions = bc_policy(obs, masks, deterministic=True)
                 action_loss = torch.abs(pred_actions - expert_action)
                 dx_loss = action_loss[:, 0].mean().item()
                 dy_loss = action_loss[:, 1].mean().item()
@@ -202,6 +203,7 @@ if __name__ == "__main__":
                 dyaw_losses += dyaw_loss
                 
             losses += loss.mean().item()
+        
         # Log training losses
         wandb.log(
             {   
@@ -220,15 +222,23 @@ if __name__ == "__main__":
         dx_losses = 0
         dy_losses = 0
         dyaw_losses = 0
-        for i, (obs, expert_action) in enumerate(eval_expert_data_loader):
-            batch_size = obs.size(0)
-            if total_samples + batch_size > int(exp_config.sample_per_epoch / 5):  # Check if adding this batch exceeds 50,000
+        for i, batch in enumerate(eval_expert_data_loader):
+            # Check if adding this batch exceeds 50,000
+            batch_size = batch[0].size(0)
+            if total_samples + batch_size > int(exp_config.sample_per_epoch / 5): 
                 break
             total_samples += batch_size
+            
+            # Data
+            if len(batch) == 3:
+                obs, expert_action, masks = batch
+            else:
+                obs, expert_action = batch
             obs, expert_action = obs.to(args.device), expert_action.to(args.device)
-
+            masks = masks.to(args.device) if len(batch) == 3 else None
+            
             with torch.no_grad():
-                pred_actions = bc_policy(obs, deterministic=True)
+                pred_actions = bc_policy(obs, masks, deterministic=True)
                 action_loss = torch.abs(pred_actions - expert_action)
                 dx_loss = action_loss[:, 0].mean().item()
                 dy_loss = action_loss[:, 1].mean().item()

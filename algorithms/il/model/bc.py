@@ -128,13 +128,13 @@ class ContFeedForward(LateFusionNet):
         else:
             raise ValueError(f"Loss name {loss} is not supported")
 
-    def get_embedded_obs(self, obs):
+    def get_embedded_obs(self, obs, masks=None):
         """Get the embedded observation."""
         return self.nn(obs)
     
-    def forward(self, obs, deterministic=False):
+    def forward(self, obss, mask=None, deterministic=False):
         """Generate an output from tensor input."""
-        out = self.get_embedded_obs(obs)
+        out = self.get_embedded_obs(obss)
         actions = self.head(out, deterministic)
         return actions
 
@@ -231,7 +231,7 @@ class LateFusionBCNet(LateFusionNet):
 
         return nn.Sequential(*layers)
 
-    def get_embedded_obs(self, obs):
+    def get_embedded_obs(self, obs, masks=None):
         """Get the embedded observation."""
         ego_state, road_objects, road_graph = self._unpack_obs(obs, num_stack=5)
         ego_state = self.ego_state_net(ego_state)
@@ -250,7 +250,7 @@ class LateFusionBCNet(LateFusionNet):
         embedding_vector = torch.cat((ego_state, road_objects, road_graph), dim=1)
         return embedding_vector
 
-    def forward(self, obss, deterministic=False):
+    def forward(self, obss, mask=None, deterministic=False):
         # Unpack observation
         embedding_vector = self.get_embedded_obs(obss)
         actions = self.head(embedding_vector, deterministic)
@@ -362,7 +362,7 @@ class LateFusionAttnBCNet(LateFusionNet):
 
         return nn.Sequential(*layers)
 
-    def get_embedded_obs(self, obs):
+    def get_embedded_obs(self, obs, masks=None):
         """Get the embedded observation."""
         # Unpack observation
         ego_state, road_objects, road_graph = self._unpack_obs(obs, num_stack=5)
@@ -387,9 +387,9 @@ class LateFusionAttnBCNet(LateFusionNet):
         embedding_vector = torch.cat((ego_state, road_objects, road_graph), dim=1)
         return embedding_vector
 
-    def forward(self, obss, attn_weights=False):
+    def forward(self, obss, mask=None, deterministic=False, attn_weights=False):
         embedding_vector = self.get_embedded_obs(obss)
-        actions = self.head(embedding_vector)
+        actions = self.head(embedding_vector, deterministic)
         
         return actions
 
@@ -441,7 +441,8 @@ class WayformerEncoder(LateFusionNet):
                 input_dim=64,
                 hidden_dim=exp_config.gmm.hidden_dim,
                 action_dim=exp_config.gmm.action_dim,
-                n_components=exp_config.gmm.n_components
+                n_components=exp_config.gmm.n_components,
+                time_dim=exp_config.gmm.time_dim
             )
         else:
             raise ValueError(f"Loss name {loss} is not supported")
@@ -465,7 +466,7 @@ class WayformerEncoder(LateFusionNet):
 
         return ego_stack, ro_stack, rg_stack
     
-    def get_embedded_obs(self, obs, mask=None):
+    def get_embedded_obs(self, obs, masks=None):
         # TODO: Implement function using mask
         # Unpack observation
         ego_state, road_objects, road_graph = self._unpack_obs(obs)
@@ -490,8 +491,8 @@ class WayformerEncoder(LateFusionNet):
 
         return context    
 
-    def forward(self, obss, mask):
+    def forward(self, obss, mask, deterministic=False):
         context = self.get_embedded_obs(obss, mask)
-        actions = self.head(context)
+        actions = self.head(context, deterministic)
         
         return actions
