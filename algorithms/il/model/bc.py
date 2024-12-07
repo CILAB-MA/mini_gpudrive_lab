@@ -394,7 +394,7 @@ class LateFusionAttnBCNet(LateFusionNet):
         return actions
 
 class WayformerEncoder(LateFusionNet):
-    def __init__(self, env_config, exp_config, loss='l1', num_stack=1):
+    def __init__(self, env_config, exp_config, loss='l1', num_stack=1, rollout_len=10, pred_len=5):
         super(WayformerEncoder, self).__init__(None, env_config, exp_config)
         self.num_stack = num_stack
         
@@ -411,17 +411,17 @@ class WayformerEncoder(LateFusionNet):
             input_dim=self.rg_input_dim * num_stack,
             net_arch=self.arch_road_graph,
         )
-        
+        self.rollout_len = rollout_len
         self.encoder = PerceiverEncoder(64, 64)
         self.agents_positional_embedding = nn.parameter.Parameter(
             torch.zeros((1, 1, (self.ro_max + 1), 64)),
             requires_grad=True
         )
         self.temporal_positional_embedding = nn.parameter.Parameter(
-            torch.zeros((1, 91, 1, 64)),
+            torch.zeros((1, rollout_len, 1, 64)),
             requires_grad=True
         )
-        self.timestep_linear = nn.Linear(64, 91)
+        self.timestep_linear = nn.Linear(64, pred_len)
         self.loss_func = loss
         
         if loss in ['l1', 'mse', 'twohot']: # make head module
@@ -442,7 +442,7 @@ class WayformerEncoder(LateFusionNet):
                 hidden_dim=exp_config.gmm.hidden_dim,
                 action_dim=exp_config.gmm.action_dim,
                 n_components=exp_config.gmm.n_components,
-                time_dim=exp_config.gmm.time_dim
+                time_dim=pred_len
             )
         else:
             raise ValueError(f"Loss name {loss} is not supported")
@@ -469,7 +469,7 @@ class WayformerEncoder(LateFusionNet):
     def get_embedded_obs(self, obs, masks=None):
         # TODO: Implement function using mask
         # Unpack observation
-        ego_state, road_objects, road_graph = self._unpack_obs(obs)
+        ego_state, road_objects, road_graph = self._unpack_obs(obs, timestep=self.rollout_len)
         batch_size = obs.shape[0]
         # Embed features
         ego_state = self.ego_state_net(ego_state)
