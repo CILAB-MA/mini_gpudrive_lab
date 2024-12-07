@@ -43,31 +43,45 @@ def parse_args():
     return args
 
 class ExpertDataset(torch.utils.data.Dataset):
-    def __init__(self, obs, actions, masks=None):
+    def __init__(self, obs, actions, masks=None, rollout_len=1, pred_len=1):
         self.obs = obs
         self.actions = actions
         self.masks = masks
+        self.num_timestep = 1 if len(obs.shape) == 2 else obs.shape[1] - rollout_len - pred_len + 1
+        self.rollout_len = rollout_len
+        self.pred_len = pred_len
         self.use_mask = False
         if self.masks is not None:
             self.use_mask = True
             if len(self.obs.shape) == 3:
                 valid_indices = self.masks[..., None]
                 self.obs = self.obs * valid_indices
-                self.actions = self.actions * valid_indices
+                self.actions = self.actions * valid_indices # mask 작업해서 잘 없어지는지 확인해야 함
             else:
                 valid_indices = self.masks.flatten() == 0
                 self.obs = self.obs.reshape(-1, self.obs.shape[-1])[valid_indices]
                 self.actions = self.actions.reshape(-1, self.actions.shape[-1])[valid_indices]
 
-
     def __len__(self):
-        return len(self.obs)
+        return len(self.obs) * self.num_timestep
 
     def __getitem__(self, idx):
-        if self.use_mask:
-            return self.obs[idx], self.actions[idx], self.masks[idx]
+        # row, column -> 
+        if self.num_timestep > 1:
+            idx1 = idx // self.num_timestep
+            idx2 = idx % self.num_timestep
+            if self.use_mask:
+                return self.obs[idx1, idx2:idx2 + self.rollout_len], \
+            self.actions[idx1, idx2 + self.rollout_len:idx2 + self.rollout_len + self.pred_len], \
+            self.masks[idx1 ,idx2:idx2 + self.rollout_len] #todo: mask 작업해야 함
+            else:
+                return self.obs[idx1, idx2:idx2 + self.rollout_len], \
+            self.actions[idx1, idx2 + self.rollout_len:idx2 + self.rollout_len + self.pred_len]
         else:
-            return self.obs[idx], self.actions[idx]
+            if self.use_mask:
+                return self.obs[idx], self.actions[idx], self.masks[idx]
+            else:
+                return self.obs[idx], self.actions[idx]
 
 if __name__ == "__main__":
     args = parse_args()
@@ -118,13 +132,15 @@ if __name__ == "__main__":
     eval_expert_masks = np.concatenate(eval_expert_masks) if (len(eval_expert_masks) > 0) else None
 
     # Make dataloader
-    expert_dataset = ExpertDataset(train_expert_obs, train_expert_actions, train_expert_masks)
+    expert_dataset = ExpertDataset(train_expert_obs, train_expert_actions, train_expert_masks,
+                                   rollout_len=10, pred_len=5)
     expert_data_loader = DataLoader(
         expert_dataset,
         batch_size=exp_config.batch_size,
         shuffle=True,
     )
-    eval_expert_dataset = ExpertDataset(eval_expert_obs, eval_expert_actions, eval_expert_masks)
+    eval_expert_dataset = ExpertDataset(eval_expert_obs, eval_expert_actions, eval_expert_masks,
+                                        rollout_len=10, pred_len=5)
     eval_expert_data_loader = DataLoader(
         eval_expert_dataset,
         batch_size=exp_config.batch_size,
