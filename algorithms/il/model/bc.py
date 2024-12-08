@@ -6,7 +6,7 @@ import numpy as np
 from typing import List
 
 from networks.perm_eq_late_fusion import LateFusionNet
-from algorithms.il.model.bc_utils.wayformer import MultiHeadAttention, PerceiverEncoder
+from algorithms.il.model.bc_utils.wayformer import SelfAttentionBlock, PerceiverEncoder
 from algorithms.il.model.bc_utils.gmm import GMM
 
 class ContHead(nn.Module):
@@ -277,17 +277,25 @@ class LateFusionAttnBCNet(LateFusionNet):
         )
         
         # Attention
-        self.ro_attn = MultiHeadAttention(
+        self.ro_attn = SelfAttentionBlock(
+            num_layers=2,
             num_heads=4,
-            num_q_input_channels=self.arch_road_objects[-1],
-            num_kv_input_channels=self.arch_road_objects[-1],
+            num_channels=64,
+            num_qk_channels=self.arch_road_objects[-1],
+            num_v_channels=self.arch_road_objects[-1],
         )
-        self.rg_attn = MultiHeadAttention(
+
+        self.rg_attn = SelfAttentionBlock(
+            num_layers=2,
             num_heads=4,
-            num_q_input_channels=self.arch_road_graph[-1],
-            num_kv_input_channels=self.arch_road_graph[-1],
+            num_channels=64,
+            num_qk_channels=self.arch_road_graph[-1],
+            num_v_channels=self.arch_road_graph[-1],
         )
-        
+        self.agents_positional_embedding = nn.parameter.Parameter(
+            torch.zeros((1, self.ro_max, 64)),
+            requires_grad=True
+        )
         self.loss_func = loss
         
         if loss in ['l1', 'mse', 'twohot']: # make head module
@@ -370,10 +378,11 @@ class LateFusionAttnBCNet(LateFusionNet):
         # Embed features
         ego_state = self.ego_state_net(ego_state)
         road_objects = self.road_object_net(road_objects)
-        road_objects_attn = self.ro_attn(road_objects, road_objects)
+        road_objects = road_objects + + self.agents_positional_embedding
+        road_objects_attn = self.ro_attn(road_objects)
         
         road_graph = self.road_graph_net(road_graph)
-        road_graph_attn = self.ro_attn(road_graph, road_graph)
+        road_graph_attn = self.ro_attn(road_graph)
 
         # Max pooling across the object dimension
         # (M, E) -> (1, E) (max pool across features)
