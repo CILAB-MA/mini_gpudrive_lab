@@ -23,16 +23,17 @@ def parse_args():
     parser = argparse.ArgumentParser('Select the dynamics model that you use')
     parser.add_argument('--action-type', '-at', type=str, default='continuous', choices=['discrete', 'multi_discrete', 'continuous'],)
     parser.add_argument('--device', '-d', type=str, default='cuda', choices=['cpu', 'cuda'],)
-    parser.add_argument('--num-stack', '-s', type=int, default=1)
+    parser.add_argument('--num-stack', '-s', type=int, default=5)
     
     # MODEL
     parser.add_argument('--model-path', '-mp', type=str, default='/data/model')
-    parser.add_argument('--model-name', '-m', type=str, default='wayformer', choices=['bc', 'late_fusion', 'attention', 'wayformer'])
+    parser.add_argument('--model-name', '-m', type=str, default='attention', choices=['bc', 'late_fusion', 'attention', 'wayformer'])
     parser.add_argument('--loss-name', '-l', type=str, default='gmm', choices=['l1', 'mse', 'twohot', 'nll', 'gmm'])
-    parser.add_argument('--action-scale', '-as', type=int, default=1)
+    parser.add_argument('--rollout-len', '-rl', type=int, default=10)
+    parser.add_argument('--pred-len', '-pl', type=int, default=5)
     
     # DATA
-    parser.add_argument('--data-path', '-dp', type=str, default='/data/wayformer')
+    parser.add_argument('--data-path', '-dp', type=str, default='/data/trajectories/stack5')
     parser.add_argument('--train-data-file', '-td', type=str, default='train_trajectory_1000.npz')
     parser.add_argument('--eval-data-file', '-ed', type=str, default='test_trajectory_200.npz')
     
@@ -133,19 +134,25 @@ if __name__ == "__main__":
 
     # Make dataloader
     expert_dataset = ExpertDataset(train_expert_obs, train_expert_actions, train_expert_masks,
-                                   rollout_len=10, pred_len=5)
+                                   rollout_len=args.rollout_len, pred_len=args.pred_len)
     expert_data_loader = DataLoader(
         expert_dataset,
         batch_size=exp_config.batch_size,
         shuffle=True,
     )
     eval_expert_dataset = ExpertDataset(eval_expert_obs, eval_expert_actions, eval_expert_masks,
-                                        rollout_len=10, pred_len=5)
+                                   rollout_len=args.rollout_len, pred_len=args.pred_len)
     eval_expert_data_loader = DataLoader(
         eval_expert_dataset,
         batch_size=exp_config.batch_size,
         shuffle=False,
     )
+    del train_expert_obs
+    del train_expert_actions
+    del train_expert_masks
+    del eval_expert_obs
+    del eval_expert_actions
+    del eval_expert_masks
     
     # Build Model
     bc_policy = MODELS[args.model_name](env_config, exp_config, args.loss_name, args.num_stack).to(args.device)
@@ -200,7 +207,6 @@ if __name__ == "__main__":
             masks = masks.to(args.device) if len(batch) == 3 else None
             
             # Forward pass
-            expert_action *= args.action_scale
             loss = LOSS[args.loss_name](bc_policy, obs, expert_action, masks)
             
             # Backward pass
