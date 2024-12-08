@@ -45,9 +45,13 @@ def parse_args():
 
 class ExpertDataset(torch.utils.data.Dataset):
     def __init__(self, obs, actions, masks=None, rollout_len=1, pred_len=1):
+    def __init__(self, obs, actions, masks=None, rollout_len=1, pred_len=1):
         self.obs = obs
         self.actions = actions
         self.masks = masks
+        self.num_timestep = 1 if len(obs.shape) == 2 else obs.shape[1] - rollout_len - pred_len + 1
+        self.rollout_len = rollout_len
+        self.pred_len = pred_len
         self.num_timestep = 1 if len(obs.shape) == 2 else obs.shape[1] - rollout_len - pred_len + 1
         self.rollout_len = rollout_len
         self.pred_len = pred_len
@@ -58,6 +62,7 @@ class ExpertDataset(torch.utils.data.Dataset):
                 valid_indices = self.masks[..., None]
                 self.obs = self.obs * valid_indices
                 self.actions = self.actions * valid_indices # mask 작업해서 잘 없어지는지 확인해야 함
+                self.actions = self.actions * valid_indices # mask 작업해서 잘 없어지는지 확인해야 함
             else:
                 valid_indices = self.masks.flatten() == 0
                 self.obs = self.obs.reshape(-1, self.obs.shape[-1])[valid_indices]
@@ -65,8 +70,25 @@ class ExpertDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.obs) * self.num_timestep
+        return len(self.obs) * self.num_timestep
 
     def __getitem__(self, idx):
+        # row, column -> 
+        if self.num_timestep > 1:
+            idx1 = idx // self.num_timestep
+            idx2 = idx % self.num_timestep
+            if self.use_mask:
+                return self.obs[idx1, idx2:idx2 + self.rollout_len], \
+            self.actions[idx1, idx2 + self.rollout_len:idx2 + self.rollout_len + self.pred_len], \
+            self.masks[idx1 ,idx2:idx2 + self.rollout_len] #todo: mask 작업해야 함
+            else:
+                return self.obs[idx1, idx2:idx2 + self.rollout_len], \
+            self.actions[idx1, idx2 + self.rollout_len:idx2 + self.rollout_len + self.pred_len]
+        else:
+            if self.use_mask:
+                return self.obs[idx], self.actions[idx], self.masks[idx]
+            else:
+                return self.obs[idx], self.actions[idx]
         # row, column -> 
         if self.num_timestep > 1:
             idx1 = idx // self.num_timestep
