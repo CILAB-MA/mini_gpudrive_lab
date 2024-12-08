@@ -45,7 +45,6 @@ def parse_args():
 
 class ExpertDataset(torch.utils.data.Dataset):
     def __init__(self, obs, actions, masks=None, rollout_len=1, pred_len=1):
-    def __init__(self, obs, actions, masks=None, rollout_len=1, pred_len=1):
         self.obs = obs
         self.actions = actions
         self.masks = masks
@@ -200,7 +199,7 @@ if __name__ == "__main__":
     )
     wandb.config.update({
         'num_stack': args.num_stack,
-        'num_scene': train_expert_actions.shape[0],
+        'num_scene': dataset_len,
         'num_vehicle': 128,
         'model_save_path': model_save_path})
     
