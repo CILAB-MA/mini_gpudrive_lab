@@ -5,7 +5,7 @@ import numpy as np
 
 
 class GMM(nn.Module):
-    def __init__(self, input_dim, hidden_dim=128, action_dim=3, n_components=10, time_dim=1):
+    def __init__(self, network_type, input_dim, hidden_dim=128, action_dim=3, n_components=10, time_dim=1):
         super(GMM, self).__init__()
         self.input_layer = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -24,6 +24,7 @@ class GMM(nn.Module):
         self.n_components = n_components
         self.action_dim = action_dim
         self.time_dim = time_dim
+        self.network_type = network_type
 
     def get_gmm_params(self, x):
         """
@@ -63,10 +64,11 @@ class GMM(nn.Module):
         
         actions = sampled_means if deterministic else dist.MultivariateNormal(sampled_means, torch.diag_embed(sampled_covariances)).sample()
         actions = actions.squeeze(2)
+        actions = actions.squeeze(1) if self.network_type != 'WayformerEncoder' else actions
         
         # Squash actions and scaling
         actions = torch.tanh(actions)
-        scale_factor = torch.tensor([6.0, 6.0, np.pi], device=actions.device)        
+        scale_factor = torch.tensor([6.0, 6.0, np.pi], device=actions.device)
         actions = scale_factor * actions
 
         return actions

@@ -120,10 +120,12 @@ class ContFeedForward(LateFusionNet):
             )
         elif loss == 'gmm':
             self.head = GMM(
+                network_type=self.__class__.__name__,
                 input_dim=exp_config.feedforward.hidden_size[-1],
                 hidden_dim=exp_config.gmm.hidden_dim,
                 action_dim=exp_config.gmm.action_dim,
-                n_components=exp_config.gmm.n_components
+                n_components=exp_config.gmm.n_components,
+                time_dim=1
             )
         else:
             raise ValueError(f"Loss name {loss} is not supported")
@@ -173,10 +175,12 @@ class LateFusionBCNet(LateFusionNet):
             )
         elif loss == 'gmm':
             self.head = GMM(
+                network_type=self.__class__.__name__,
                 input_dim=self.shared_net_input_dim,
                 hidden_dim=exp_config.gmm.hidden_dim,
                 action_dim=exp_config.gmm.action_dim,
-                n_components=exp_config.gmm.n_components
+                n_components=exp_config.gmm.n_components,
+                time_dim=1
             )
         else:
             raise ValueError(f"Loss name {loss} is not supported")
@@ -312,10 +316,12 @@ class LateFusionAttnBCNet(LateFusionNet):
             )
         elif loss == 'gmm':
             self.head = GMM(
+                network_type=self.__class__.__name__,
                 input_dim=self.shared_net_input_dim,
                 hidden_dim=exp_config.gmm.hidden_dim,
                 action_dim=exp_config.gmm.action_dim,
-                n_components=exp_config.gmm.n_components
+                n_components=exp_config.gmm.n_components,
+                time_dim=1
             )
         else:
             raise ValueError(f"Loss name {loss} is not supported")
@@ -447,6 +453,7 @@ class WayformerEncoder(LateFusionNet):
             )
         elif loss == 'gmm':
             self.head = GMM(
+                network_type=self.__class__.__name__,
                 input_dim=64,
                 hidden_dim=exp_config.gmm.hidden_dim,
                 action_dim=exp_config.gmm.action_dim,
