@@ -23,22 +23,22 @@ def parse_args():
     parser = argparse.ArgumentParser('Select the dynamics model that you use')
     parser.add_argument('--action-type', '-at', type=str, default='continuous', choices=['discrete', 'multi_discrete', 'continuous'],)
     parser.add_argument('--device', '-d', type=str, default='cuda', choices=['cpu', 'cuda'],)
-    parser.add_argument('--num-stack', '-s', type=int, default=5)
+    parser.add_argument('--num-stack', '-s', type=int, default=1)
     
     # MODEL
     parser.add_argument('--model-path', '-mp', type=str, default='/data/model')
-    parser.add_argument('--model-name', '-m', type=str, default='attention', choices=['bc', 'late_fusion', 'attention', 'wayformer'])
+    parser.add_argument('--model-name', '-m', type=str, default='wayformer', choices=['bc', 'late_fusion', 'attention', 'wayformer'])
     parser.add_argument('--loss-name', '-l', type=str, default='gmm', choices=['l1', 'mse', 'twohot', 'nll', 'gmm'])
     parser.add_argument('--rollout-len', '-rl', type=int, default=10)
     parser.add_argument('--pred-len', '-pl', type=int, default=5)
     
     # DATA
-    parser.add_argument('--data-path', '-dp', type=str, default='/data/trajectories/stack5')
+    parser.add_argument('--data-path', '-dp', type=str, default='/data/wayformer/')
     parser.add_argument('--train-data-file', '-td', type=str, default='train_trajectory_1000.npz')
     parser.add_argument('--eval-data-file', '-ed', type=str, default='test_trajectory_200.npz')
     
     # EXPERIMENT
-    parser.add_argument('--exp-name', '-en', type=str, default='exp_description')
+    parser.add_argument('--exp-name', '-en', type=str, default='all_data')
     args = parser.parse_args()
     
     return args
@@ -221,9 +221,9 @@ if __name__ == "__main__":
             with torch.no_grad():
                 pred_actions = bc_policy(obs, masks, deterministic=True)
                 action_loss = torch.abs(pred_actions - expert_action)
-                dx_loss = action_loss[:, 0].mean().item()
-                dy_loss = action_loss[:, 1].mean().item()
-                dyaw_loss = action_loss[:, 2].mean().item()
+                dx_loss = action_loss[..., 0].mean().item()
+                dy_loss = action_loss[..., 1].mean().item()
+                dyaw_loss = action_loss[..., 2].mean().item()
                 dx_losses += dx_loss
                 dy_losses += dy_loss
                 dyaw_losses += dyaw_loss
@@ -266,9 +266,9 @@ if __name__ == "__main__":
             with torch.no_grad():
                 pred_actions = bc_policy(obs, masks, deterministic=True)
                 action_loss = torch.abs(pred_actions - expert_action)
-                dx_loss = action_loss[:, 0].mean().item()
-                dy_loss = action_loss[:, 1].mean().item()
-                dyaw_loss = action_loss[:, 2].mean().item()
+                dx_loss = action_loss[..., 0].mean().item()
+                dy_loss = action_loss[..., 1].mean().item()
+                dyaw_loss = action_loss[..., 2].mean().item()
                 dx_losses += dx_loss
                 dy_losses += dy_loss
                 dyaw_losses += dyaw_loss
