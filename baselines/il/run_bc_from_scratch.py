@@ -33,9 +33,9 @@ def parse_args():
     parser.add_argument('--pred-len', '-pl', type=int, default=5)
     
     # DATA
-    parser.add_argument('--data-path', '-dp', type=str, default='/data/wayformer/')
-    parser.add_argument('--train-data-file', '-td', type=str, default='train_trajectory_1000.npz')
-    parser.add_argument('--eval-data-file', '-ed', type=str, default='test_trajectory_200.npz')
+    parser.add_argument('--data-path', '-dp', type=str, default='/data/tom/')
+    parser.add_argument('--train-data-file', '-td', type=str, default='trajectory_0.npz')
+    parser.add_argument('--eval-data-file', '-ed', type=str, default='trajectory_0.npz')
     
     # EXPERIMENT
     parser.add_argument('--exp-name', '-en', type=str, default='all_data')
@@ -45,13 +45,12 @@ def parse_args():
     return args
 
 class ExpertDataset(torch.utils.data.Dataset):
-    def __init__(self, obs, actions, masks=None, rollout_len=1, pred_len=1):
+    def __init__(self, obs, actions, masks=None, other_info=None,
+                 rollout_len=1, pred_len=1):
         self.obs = obs
         self.actions = actions
         self.masks = masks
-        self.num_timestep = 1 if len(obs.shape) == 2 else obs.shape[1] - rollout_len - pred_len + 1
-        self.rollout_len = rollout_len
-        self.pred_len = pred_len
+        self.other_info = other_info
         self.num_timestep = 1 if len(obs.shape) == 2 else obs.shape[1] - rollout_len - pred_len + 1
         self.rollout_len = rollout_len
         self.pred_len = pred_len
@@ -66,7 +65,7 @@ class ExpertDataset(torch.utils.data.Dataset):
                 valid_indices = self.masks.flatten() == 0
                 self.obs = self.obs.reshape(-1, self.obs.shape[-1])[valid_indices]
                 self.actions = self.actions.reshape(-1, self.actions.shape[-1])[valid_indices]
-
+                
     def __len__(self):
         return len(self.obs) * self.num_timestep
 
@@ -117,28 +116,36 @@ if __name__ == "__main__":
     
     # Additional data depends on model
     train_expert_masks, eval_expert_masks = [], []
+    train_other_info, eval_other_info = [], []
     
     with np.load(os.path.join(args.data_path, args.train_data_file)) as npz:
         train_expert_obs.append(npz['obs'])
         train_expert_actions.append(npz['actions'])
         if 'dead_mask' in npz.keys():
             train_expert_masks.append(npz['dead_mask'])
+        if 'other_info' in npz.keys():
+            train_other_info.append(npz['other_info'])
     with np.load(os.path.join(args.data_path, args.eval_data_file)) as npz:
         eval_expert_obs.append(npz['obs'])
         eval_expert_actions.append(npz['actions'])
         if 'dead_mask' in npz.keys():
             eval_expert_masks.append(npz['dead_mask'])
+        if 'other_info' in npz.keys():
+            eval_other_info.append(npz['other_info'])
 
     train_expert_obs = np.concatenate(train_expert_obs)
     train_expert_actions = np.concatenate(train_expert_actions)
     train_expert_masks = np.concatenate(train_expert_masks) if len(train_expert_masks) > 0 else None
+    train_other_info = np.concatenate(train_other_info) if len(train_other_info) > 0 else None
 
     eval_expert_obs = np.concatenate(eval_expert_obs)
     eval_expert_actions = np.concatenate(eval_expert_actions)
     eval_expert_masks = np.concatenate(eval_expert_masks) if (len(eval_expert_masks) > 0) else None
+    eval_other_info = np.concatenate(eval_other_info) if (len(eval_other_info) > 0) else None
 
     # Make dataloader
     expert_dataset = ExpertDataset(train_expert_obs, train_expert_actions, train_expert_masks,
+                                   other_info=train_other_info,
                                    rollout_len=args.rollout_len, pred_len=args.pred_len)
     expert_data_loader = DataLoader(
         expert_dataset,
@@ -146,6 +153,7 @@ if __name__ == "__main__":
         shuffle=True,
     )
     eval_expert_dataset = ExpertDataset(eval_expert_obs, eval_expert_actions, eval_expert_masks,
+                                        other_info=eval_other_info,
                                    rollout_len=args.rollout_len, pred_len=args.pred_len)
     eval_expert_data_loader = DataLoader(
         eval_expert_dataset,
