@@ -39,6 +39,7 @@ def parse_args():
     
     # EXPERIMENT
     parser.add_argument('--exp-name', '-en', type=str, default='all_data')
+    parser.add_argument('--use-wandb', action='store_true')
     args = parser.parse_args()
     
     return args
@@ -164,27 +165,27 @@ if __name__ == "__main__":
     # Configure loss and optimizer
     optimizer = Adam(bc_policy.parameters(), lr=exp_config.lr)
     dataset_len = len(expert_dataset)
-
-    # Logging
-    with open("private.yaml") as f:
-        private_info = yaml.load(f, Loader=yaml.FullLoader)
-    wandb.login(key=private_info["wandb_key"])
-    run_id = f"{type(bc_policy).__name__}_{args.exp_name}"
-    model_save_path = f"{args.model_path}/{args.model_name}_{args.exp_name}.pth"
-    wandb.init(
-        project=private_info['main_project'],
-        entity=private_info['entity'],
-        name=run_id,
-        id=run_id + "_" + datetime.now().strftime("%m%d%H%M"),
-        group=f"{args.model_name}",
-        config={**exp_config.__dict__, **env_config.__dict__},
-        tags=[args.model_name, args.loss_name, args.exp_name, str(dataset_len)]
-    )
-    wandb.config.update({
-        'num_stack': args.num_stack,
-        'num_scene': dataset_len,
-        'num_vehicle': 128,
-        'model_save_path': model_save_path})
+    if args.use_wandb:
+        # Logging
+        with open("private.yaml") as f:
+            private_info = yaml.load(f, Loader=yaml.FullLoader)
+        wandb.login(key=private_info["wandb_key"])
+        run_id = f"{type(bc_policy).__name__}_{args.exp_name}"
+        model_save_path = f"{args.model_path}/{args.model_name}_{args.exp_name}.pth"
+        wandb.init(
+            project=private_info['main_project'],
+            entity=private_info['entity'],
+            name=run_id,
+            id=run_id + "_" + datetime.now().strftime("%m%d%H%M"),
+            group=f"{args.model_name}",
+            config={**exp_config.__dict__, **env_config.__dict__},
+            tags=[args.model_name, args.loss_name, args.exp_name, str(dataset_len)]
+        )
+        wandb.config.update({
+            'num_stack': args.num_stack,
+            'num_scene': dataset_len,
+            'num_vehicle': 128,
+            'model_save_path': model_save_path})
     
     global_step = 0
     masks = None
@@ -229,17 +230,17 @@ if __name__ == "__main__":
                 dyaw_losses += dyaw_loss
                 
             losses += loss.mean().item()
-        
-        # Log training losses
-        wandb.log(
-            {   
-                "train/loss": losses / (i + 1),
-                "train/loss": losses / (i + 1),
-                "train/dx_loss": dx_losses / (i + 1),
-                "train/dy_loss": dy_losses / (i + 1),
-                "train/dyaw_loss": dyaw_losses / (i + 1),
-            }
-        )
+        if args.use_wandb:
+            # Log training losses
+            wandb.log(
+                {   
+                    "train/loss": losses / (i + 1),
+                    "train/loss": losses / (i + 1),
+                    "train/dx_loss": dx_losses / (i + 1),
+                    "train/dy_loss": dy_losses / (i + 1),
+                    "train/dyaw_loss": dyaw_losses / (i + 1),
+                }
+            )
 
         # Evaluation loop
         bc_policy.eval()
@@ -273,16 +274,16 @@ if __name__ == "__main__":
                 dy_losses += dy_loss
                 dyaw_losses += dyaw_loss
                 losses += action_loss.mean().item()
-            
+        if args.use_wandb:  
         # Log evaluation losses
-        wandb.log(
-            {
-                "eval/loss": losses / (i + 1) ,
-                "eval/dx_loss": dx_losses / (i + 1),
-                "eval/dy_loss": dy_losses / (i + 1),
-                "eval/dyaw_loss": dyaw_losses / (i + 1),
-            }
-        )
+            wandb.log(
+                {
+                    "eval/loss": losses / (i + 1) ,
+                    "eval/dx_loss": dx_losses / (i + 1),
+                    "eval/dy_loss": dy_losses / (i + 1),
+                    "eval/dyaw_loss": dyaw_losses / (i + 1),
+                }
+            )
 
     # Save policy
     if not os.path.exists(args.model_path):
