@@ -4,10 +4,9 @@ import numpy as np
 import torch
 from torch.optim import Adam
 from torch.utils.data import DataLoader
-import torch.optim as optim
 import os, sys, torch
 sys.path.append(os.getcwd())
-import wandb, yaml, argparse
+import wandb, yaml, argparse, shutil
 from tqdm import tqdm
 from datetime import datetime
 
@@ -22,7 +21,7 @@ logger.setLevel(logging.INFO)
 def parse_args():
     parser = argparse.ArgumentParser('Select the dynamics model that you use')
     parser.add_argument('--action-type', '-at', type=str, default='continuous', choices=['discrete', 'multi_discrete', 'continuous'],)
-    parser.add_argument('--device', '-d', type=str, default='cpu', choices=['cpu', 'cuda'],)
+    parser.add_argument('--device', '-d', type=str, default='cuda', choices=['cpu', 'cuda'],)
     parser.add_argument('--num-stack', '-s', type=int, default=1)
     
     # MODEL
@@ -33,7 +32,7 @@ def parse_args():
     parser.add_argument('--pred-len', '-pl', type=int, default=5)
     
     # DATA
-    parser.add_argument('--data-path', '-dp', type=str, default='/data/tom/')
+    parser.add_argument('--data-path', '-dp', type=str, default='.')
     parser.add_argument('--train-data-file', '-td', type=str, default='trajectory_0.npz')
     parser.add_argument('--eval-data-file', '-ed', type=str, default='trajectory_0.npz')
     
@@ -50,6 +49,10 @@ class ExpertDataset(torch.utils.data.Dataset):
         self.obs = obs
         obs_pad = np.zeros((obs.shape[0], rollout_len - 1, *obs.shape[2:]), dtype=np.float32)
         self.obs = np.concatenate([obs_pad, self.obs], axis=1)
+        self.road_mask = road_mask
+        road_mask_pad = np.zeros((road_mask.shape[0], rollout_len - 1, *road_mask.shape[2:]), dtype=np.float32)
+        self.road_mask = np.concatenate([road_mask_pad, self.road_mask], axis=1)
+        
         self.actions = actions
         self.masks = 1 - masks
         self.other_info = other_info
@@ -57,8 +60,10 @@ class ExpertDataset(torch.utils.data.Dataset):
         self.rollout_len = rollout_len
         self.pred_len = pred_len
         self.use_mask = False
-        self.road_mask = road_mask
+
         self.partner_mask = other_info[..., -1]
+        partner_mask_pad = np.zeros((self.partner_mask.shape[0], rollout_len - 1, *self.partner_mask.shape[2:]), dtype=np.float32)
+        self.partner_mask = np.concatenate([partner_mask_pad, self.partner_mask], axis=1)
         if self.masks is not None:
             self.use_mask = True
         
@@ -75,14 +80,12 @@ class ExpertDataset(torch.utils.data.Dataset):
             idx2 = idx % self.num_timestep
             for var_name in self.full_var:
                 if self.__dict__[var_name] is not None:
-                    if var_name == 'obs':
+                    if var_name in ['obs', 'road_mask', 'partner_mask']:
                         data = self.__dict__[var_name][idx1, idx2 + self.rollout_len - 1:idx2 + 2 * self.rollout_len - 1] # idx 1 -> (0, 1 + 10 -1) -> (0, 10) start with first timestep
-                    elif var_name in ['road_mask', 'partner_mask']:
-                        data = self.__dict__[var_name][idx1, idx2:idx2 + self.rollout_len]
                     elif var_name == 'actions':
                         data = self.__dict__[var_name][idx1, idx2 + self.rollout_len - 1:idx2 + self.rollout_len + self.pred_len - 1]
                     elif var_name == 'masks':
-                        data = self.__dict__[var_name][idx1 ,idx2 + self.rollout_len + self.pred_len - 1]
+                        data = self.__dict__[var_name][idx1 ,idx2 + self.rollout_len + self.pred_len - 2]
                     else:
                         raise ValueError(f"Not in data {self.full_var}. Your input is {var_name}")
                     batch = batch + (data, )   
@@ -92,6 +95,22 @@ class ExpertDataset(torch.utils.data.Dataset):
                     data = self.__dict__[var_name][idx]
                     batch = batch + (data, )   
         return batch
+    
+def cache_data(data_path, train_file, eval_file, cache_dir='/tmp/data_cache'):
+    """Cache data locally from NAS to reduce I/O overhead."""
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+    train_cache_path = os.path.join(cache_dir, train_file)
+    eval_cache_path = os.path.join(cache_dir, eval_file)
+
+    # Cache train data
+    if not os.path.exists(train_cache_path):
+        shutil.copy(os.path.join(data_path, train_file), train_cache_path)
+    # Cache eval data
+    if not os.path.exists(eval_cache_path):
+        shutil.copy(os.path.join(data_path, eval_file), eval_cache_path)
+
+    return train_cache_path, eval_cache_path
 
 if __name__ == "__main__":
     args = parse_args()
@@ -114,7 +133,9 @@ if __name__ == "__main__":
             torch.linspace(-np.pi, np.pi, 100), decimals=3
         ).to(args.device),
     )
-    
+    train_cache_path, eval_cache_path = cache_data(
+        args.data_path, args.train_data_file, args.eval_data_file
+    )
     # Get state action pairs
     train_expert_obs, train_expert_actions = [], []
     eval_expert_obs, eval_expert_actions, = [], []
@@ -124,26 +145,22 @@ if __name__ == "__main__":
     train_other_info, eval_other_info = [], []
     train_road_mask, eval_road_mask = [], []
     
-    with np.load(os.path.join(args.data_path, args.train_data_file)) as npz:
-        train_expert_obs.append(npz['obs'])
-        train_expert_actions.append(npz['actions'])
-        if 'dead_mask' in npz.keys():
-            train_expert_masks.append(npz['dead_mask'])
-        if 'other_info' in npz.keys():
-            train_other_info.append(npz['other_info'])
-        if 'road_mask' in npz.keys():
-            train_road_mask.append(npz['other_info'])
-        
-    with np.load(os.path.join(args.data_path, args.eval_data_file)) as npz:
-        eval_expert_obs.append(npz['obs'])
-        eval_expert_actions.append(npz['actions'])
-        if 'dead_mask' in npz.keys():
-            eval_expert_masks.append(npz['dead_mask'])
-        if 'other_info' in npz.keys():
-            eval_other_info.append(npz['other_info'])
-        if 'road_mask' in npz.keys():
-            eval_road_mask.append(npz['road_mask'])
+    # Load cached data
+    with np.load(train_cache_path) as npz:
+        train_expert_obs = [npz['obs']]
+        train_expert_actions = [npz['actions']]
+        train_expert_masks = [npz['dead_mask']] if 'dead_mask' in npz.keys() else []
+        train_other_info = [npz['other_info']] if 'other_info' in npz.keys() else []
+        train_road_mask = [npz['road_mask']] if 'road_mask' in npz.keys() else []
 
+    with np.load(eval_cache_path) as npz:
+        eval_expert_obs = [npz['obs']]
+        eval_expert_actions = [npz['actions']]
+        eval_expert_masks = [npz['dead_mask']] if 'dead_mask' in npz.keys() else []
+        eval_other_info = [npz['other_info']] if 'other_info' in npz.keys() else []
+        eval_road_mask = [npz['road_mask']] if 'road_mask' in npz.keys() else []
+
+    # Combine data (no changes)
     train_expert_obs = np.concatenate(train_expert_obs)
     train_expert_actions = np.concatenate(train_expert_actions)
     train_expert_masks = np.concatenate(train_expert_masks) if len(train_expert_masks) > 0 else None
@@ -152,26 +169,34 @@ if __name__ == "__main__":
 
     eval_expert_obs = np.concatenate(eval_expert_obs)
     eval_expert_actions = np.concatenate(eval_expert_actions)
-    eval_expert_masks = np.concatenate(eval_expert_masks) if (len(eval_expert_masks) > 0) else None
-    eval_other_info = np.concatenate(eval_other_info) if (len(eval_other_info) > 0) else None
-    eval_road_mask = np.concatenate(eval_road_mask) if (len(eval_road_mask) > 0) else None
-
-    # Make dataloader
-    expert_dataset = ExpertDataset(train_expert_obs, train_expert_actions, train_expert_masks,
-                                   other_info=train_other_info, road_mask=train_road_mask,
-                                   rollout_len=args.rollout_len, pred_len=args.pred_len)
+    eval_expert_masks = np.concatenate(eval_expert_masks) if len(eval_expert_masks) > 0 else None
+    eval_other_info = np.concatenate(eval_other_info) if len(eval_other_info) > 0 else None
+    eval_road_mask = np.concatenate(eval_road_mask) if len(eval_road_mask) > 0 else None
+    dataset_len = len(train_expert_obs)
+    num_cpus = os.cpu_count()
+    # DataLoader with multiple workers
     expert_data_loader = DataLoader(
-        expert_dataset,
+        ExpertDataset(
+            train_expert_obs, train_expert_actions, train_expert_masks,
+            other_info=train_other_info, road_mask=train_road_mask,
+            rollout_len=args.rollout_len, pred_len=args.pred_len
+        ),
         batch_size=exp_config.batch_size,
         shuffle=True,
+        num_workers=int(num_cpus / 2),
+        pin_memory=True
     )
-    eval_expert_dataset = ExpertDataset(eval_expert_obs, eval_expert_actions, eval_expert_masks,
-                                        other_info=eval_other_info, road_mask=eval_road_mask,
-                                   rollout_len=args.rollout_len, pred_len=args.pred_len)
+
     eval_expert_data_loader = DataLoader(
-        eval_expert_dataset,
+        ExpertDataset(
+            eval_expert_obs, eval_expert_actions, eval_expert_masks,
+            other_info=eval_other_info, road_mask=eval_road_mask,
+            rollout_len=args.rollout_len, pred_len=args.pred_len
+        ),
         batch_size=exp_config.batch_size,
         shuffle=False,
+        num_workers=int(num_cpus / 2),
+        pin_memory=True
     )
     del train_expert_obs
     del train_expert_actions
@@ -185,7 +210,6 @@ if __name__ == "__main__":
     
     # Configure loss and optimizer
     optimizer = Adam(bc_policy.parameters(), lr=exp_config.lr)
-    dataset_len = len(expert_dataset)
     if args.use_wandb:
         # Logging
         with open("private.yaml") as f:
@@ -218,7 +242,6 @@ if __name__ == "__main__":
         dy_losses = 0
         dyaw_losses = 0
         for i, batch in enumerate(expert_data_loader):
-            # Check if adding this batch exceeds 50,000
             batch_size = batch[0].size(0)
             if total_samples + batch_size > exp_config.sample_per_epoch:
                 break
@@ -264,7 +287,7 @@ if __name__ == "__main__":
                     "train/dx_loss": dx_losses / (i + 1),
                     "train/dy_loss": dy_losses / (i + 1),
                     "train/dyaw_loss": dyaw_losses / (i + 1),
-                }
+                }, step=epoch
             )
 
         # Evaluation loop
@@ -311,7 +334,7 @@ if __name__ == "__main__":
                     "eval/dx_loss": dx_losses / (i + 1),
                     "eval/dy_loss": dy_losses / (i + 1),
                     "eval/dyaw_loss": dyaw_losses / (i + 1),
-                }
+                }, step=epoch
             )
 
     # Save policy
