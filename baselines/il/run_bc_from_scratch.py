@@ -53,7 +53,7 @@ class ExpertDataset(torch.utils.data.Dataset):
         self.actions = actions
         self.masks = 1 - masks
         self.other_info = other_info
-        self.num_timestep = 1 if len(obs.shape) == 2 else obs.shape[1] - rollout_len - pred_len + 1
+        self.num_timestep = 1 if len(obs.shape) == 2 else obs.shape[1] - rollout_len - pred_len + 2
         self.rollout_len = rollout_len
         self.pred_len = pred_len
         self.use_mask = False
