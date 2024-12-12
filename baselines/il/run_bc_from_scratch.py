@@ -58,31 +58,40 @@ class ExpertDataset(torch.utils.data.Dataset):
         self.pred_len = pred_len
         self.use_mask = False
         self.road_mask = road_mask
-        
+        self.partner_mask = other_info[..., -1]
         if self.masks is not None:
             self.use_mask = True
-                
+        
+        self.full_var = ['obs', 'actions', 'masks', 'partner_mask', 'road_mask'] # todo: add other info
+
     def __len__(self):
         return len(self.obs) * self.num_timestep
 
     def __getitem__(self, idx):
         # row, column -> 
+        batch = ()
         if self.num_timestep > 1:
             idx1 = idx // self.num_timestep
             idx2 = idx % self.num_timestep
-            if self.use_mask:
-                return self.obs[idx1, idx2:idx2 + self.rollout_len], \
-            self.actions[idx1, idx2 + self.rollout_len - 1:idx2 + self.rollout_len + self.pred_len - 1], \
-            self.masks[idx1 ,idx2 + self.rollout_len + self.pred_len - 1]
-            else:
-                return self.obs[idx1, idx2:idx2 + self.rollout_len], \
-            self.actions[idx1, idx2 + self.rollout_len - 1:idx2 + self.rollout_len + self.pred_len - 1]
+            for var_name in self.full_var:
+                if self.__dict__[var_name] is not None:
+                    if var_name == 'obs':
+                        data = self.__dict__[var_name][idx1, idx2 + self.rollout_len - 1:idx2 + 2 * self.rollout_len - 1] # idx 1 -> (0, 1 + 10 -1) -> (0, 10) start with first timestep
+                    elif var_name in ['road_mask', 'partner_mask']:
+                        data = self.__dict__[var_name][idx1, idx2:idx2 + self.rollout_len]
+                    elif var_name == 'actions':
+                        data = self.__dict__[var_name][idx1, idx2 + self.rollout_len - 1:idx2 + self.rollout_len + self.pred_len - 1]
+                    elif var_name == 'masks':
+                        data = self.__dict__[var_name][idx1 ,idx2 + self.rollout_len + self.pred_len - 1]
+                    else:
+                        raise ValueError(f"Not in data {self.full_var}. Your input is {var_name}")
+                    batch = batch + (data, )   
         else:
-            if self.use_mask:
-                return self.obs[idx], self.actions[idx], self.masks[idx]
-            else:
-                return self.obs[idx], self.actions[idx]
-
+            for var_name in self.full_var:
+                if self.__dict__[var_name] is not None:
+                    data = self.__dict__[var_name][idx]
+                    batch = batch + (data, )   
+        return batch
 
 if __name__ == "__main__":
     args = parse_args()
@@ -113,6 +122,7 @@ if __name__ == "__main__":
     # Additional data depends on model
     train_expert_masks, eval_expert_masks = [], []
     train_other_info, eval_other_info = [], []
+    train_road_mask, eval_road_mask = [], []
     
     with np.load(os.path.join(args.data_path, args.train_data_file)) as npz:
         train_expert_obs.append(npz['obs'])
@@ -121,6 +131,9 @@ if __name__ == "__main__":
             train_expert_masks.append(npz['dead_mask'])
         if 'other_info' in npz.keys():
             train_other_info.append(npz['other_info'])
+        if 'road_mask' in npz.keys():
+            train_road_mask.append(npz['other_info'])
+        
     with np.load(os.path.join(args.data_path, args.eval_data_file)) as npz:
         eval_expert_obs.append(npz['obs'])
         eval_expert_actions.append(npz['actions'])
@@ -128,20 +141,24 @@ if __name__ == "__main__":
             eval_expert_masks.append(npz['dead_mask'])
         if 'other_info' in npz.keys():
             eval_other_info.append(npz['other_info'])
+        if 'road_mask' in npz.keys():
+            eval_road_mask.append(npz['road_mask'])
 
     train_expert_obs = np.concatenate(train_expert_obs)
     train_expert_actions = np.concatenate(train_expert_actions)
     train_expert_masks = np.concatenate(train_expert_masks) if len(train_expert_masks) > 0 else None
     train_other_info = np.concatenate(train_other_info) if len(train_other_info) > 0 else None
+    train_road_mask = np.concatenate(train_road_mask) if len(train_road_mask) > 0 else None
 
     eval_expert_obs = np.concatenate(eval_expert_obs)
     eval_expert_actions = np.concatenate(eval_expert_actions)
     eval_expert_masks = np.concatenate(eval_expert_masks) if (len(eval_expert_masks) > 0) else None
     eval_other_info = np.concatenate(eval_other_info) if (len(eval_other_info) > 0) else None
+    eval_road_mask = np.concatenate(eval_road_mask) if (len(eval_road_mask) > 0) else None
 
     # Make dataloader
     expert_dataset = ExpertDataset(train_expert_obs, train_expert_actions, train_expert_masks,
-                                   other_info=train_other_info,
+                                   other_info=train_other_info, road_mask=train_road_mask,
                                    rollout_len=args.rollout_len, pred_len=args.pred_len)
     expert_data_loader = DataLoader(
         expert_dataset,
@@ -149,7 +166,7 @@ if __name__ == "__main__":
         shuffle=True,
     )
     eval_expert_dataset = ExpertDataset(eval_expert_obs, eval_expert_actions, eval_expert_masks,
-                                        other_info=eval_other_info,
+                                        other_info=eval_other_info, road_mask=eval_road_mask,
                                    rollout_len=args.rollout_len, pred_len=args.pred_len)
     eval_expert_data_loader = DataLoader(
         eval_expert_dataset,
@@ -208,12 +225,16 @@ if __name__ == "__main__":
             total_samples += batch_size
             
             # Data
-            if len(batch) == 3:
+            if len(batch) == 5:
+                obs, expert_action, masks, partner_masks, road_masks = batch 
+            elif len(batch) == 3:
                 obs, expert_action, masks = batch
             else:
                 obs, expert_action = batch
             obs, expert_action = obs.to(args.device), expert_action.to(args.device)
-            masks = masks.to(args.device) if len(batch) == 3 else None
+            masks = masks.to(args.device) if len(batch) > 2 else None
+            partner_masks = partner_masks.to(args.device) if len(batch) > 3 else None
+            road_masks = road_masks.to(args.device) if len(batch) > 3 else None
             
             # Forward pass
             loss = LOSS[args.loss_name](bc_policy, obs, expert_action, masks)
@@ -260,13 +281,17 @@ if __name__ == "__main__":
                 break
             total_samples += batch_size
             
-            # Data
-            if len(batch) == 3:
+            # Data #todo: add other info
+            if len(batch) == 5:
+                obs, expert_action, masks, partner_masks, road_masks = batch 
+            elif len(batch) == 3:
                 obs, expert_action, masks = batch
             else:
                 obs, expert_action = batch
             obs, expert_action = obs.to(args.device), expert_action.to(args.device)
-            masks = masks.to(args.device) if len(batch) == 3 else None
+            masks = masks.to(args.device) if len(batch) > 2 else None
+            partner_masks = partner_masks.to(args.device) if len(batch) > 3 else None
+            road_masks = road_masks.to(args.device) if len(batch) > 3 else None
             
             with torch.no_grad():
                 pred_actions = bc_policy(obs, masks, deterministic=True)
