@@ -45,9 +45,11 @@ def parse_args():
     return args
 
 class ExpertDataset(torch.utils.data.Dataset):
-    def __init__(self, obs, actions, masks=None, other_info=None,
+    def __init__(self, obs, actions, masks=None, other_info=None, road_mask=None,
                  rollout_len=1, pred_len=1):
         self.obs = obs
+        obs_pad = torch.zeros((obs.shape[0], rollout_len - 1, *obs.shape[2:])) # 눈코딩 체크해야함
+        self.obs = torch.cat([self.obs, obs_pad], dim=1)
         self.actions = actions
         self.masks = masks
         self.other_info = other_info
@@ -55,16 +57,18 @@ class ExpertDataset(torch.utils.data.Dataset):
         self.rollout_len = rollout_len
         self.pred_len = pred_len
         self.use_mask = False
+        self.road_mask = road_mask
+        
         if self.masks is not None:
             self.use_mask = True
-            if len(self.obs.shape) == 3:
-                valid_indices = self.masks[..., None]
-                self.obs = self.obs * valid_indices
-                self.actions = self.actions * valid_indices #TODO: whether the mask operation is properly removing the intended elements.
-            else:
-                valid_indices = self.masks.flatten() == 0
-                self.obs = self.obs.reshape(-1, self.obs.shape[-1])[valid_indices]
-                self.actions = self.actions.reshape(-1, self.actions.shape[-1])[valid_indices]
+        #     if len(self.obs.shape) == 3:
+        #         valid_indices = self.masks[..., None]
+        #         self.obs = self.obs * valid_indices
+        #         self.actions = self.actions * valid_indices #TODO: whether the mask operation is properly removing the intended elements.
+        #     else:
+        #         valid_indices = self.masks.flatten() == 0
+        #         self.obs = self.obs.reshape(-1, self.obs.shape[-1])[valid_indices]
+        #         self.actions = self.actions.reshape(-1, self.actions.shape[-1])[valid_indices]
                 
     def __len__(self):
         return len(self.obs) * self.num_timestep
@@ -76,11 +80,11 @@ class ExpertDataset(torch.utils.data.Dataset):
             idx2 = idx % self.num_timestep
             if self.use_mask:
                 return self.obs[idx1, idx2:idx2 + self.rollout_len], \
-            self.actions[idx1, idx2 + self.rollout_len:idx2 + self.rollout_len + self.pred_len], \
-            self.masks[idx1 ,idx2:idx2 + self.rollout_len] #TODO: mask operation
+            self.actions[idx1, idx2 + self.rollout_len - 1:idx2 + self.rollout_len + self.pred_len - 1], \
+            self.masks[idx1 ,idx2 + self.rollout_len - 1] #TODO: mask operation
             else:
                 return self.obs[idx1, idx2:idx2 + self.rollout_len], \
-            self.actions[idx1, idx2 + self.rollout_len:idx2 + self.rollout_len + self.pred_len]
+            self.actions[idx1, idx2 + self.rollout_len - 1:idx2 + self.rollout_len + self.pred_len - 1]
         else:
             if self.use_mask:
                 return self.obs[idx], self.actions[idx], self.masks[idx]
