@@ -51,7 +51,7 @@ class ExpertDataset(torch.utils.data.Dataset):
         obs_pad = np.zeros((obs.shape[0], rollout_len - 1, *obs.shape[2:]), dtype=np.float32)
         self.obs = np.concatenate([self.obs, obs_pad], axis=1)
         self.actions = actions
-        self.masks = masks
+        self.masks = 1 - masks
         self.other_info = other_info
         self.num_timestep = 1 if len(obs.shape) == 2 else obs.shape[1] - rollout_len - pred_len + 1
         self.rollout_len = rollout_len
