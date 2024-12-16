@@ -87,7 +87,8 @@ def gmm_loss(model, obs, expert_actions, masks=None):
     '''
     compute the gmm loss between the predicted and expert actions
     '''
-    embedding_vector = model.get_embedded_obs(obs, masks)
+    mask, _, _, _ = masks
+    embedding_vector = model.get_embedded_obs(obs, masks[1:])
     means, covariances, weights, components = model.head.get_gmm_params(embedding_vector)
     
     # Rescaling actions and resquash
@@ -109,5 +110,5 @@ def gmm_loss(model, obs, expert_actions, masks=None):
     log_probs = torch.stack(log_probs, dim=-1)
     weighted_log_probs = log_probs + torch.log(weights + 1e-8) + torch.log(1 - squash_expert_actions**2 + 1e-6).sum(dim=-1, keepdim=True)
     loss = -torch.logsumexp(weighted_log_probs, dim=-1)
-    loss = loss * masks.unsqueeze(-1)
-    return loss.sum() / masks.sum()
+    loss = loss * mask.unsqueeze(-1)
+    return loss.sum() / mask.sum()

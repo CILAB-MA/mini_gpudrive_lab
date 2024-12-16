@@ -384,7 +384,7 @@ class LateFusionAttnBCNet(LateFusionNet):
         # Embed features
         ego_state = self.ego_state_net(ego_state)
         road_objects = self.road_object_net(road_objects)
-        road_objects = road_objects + + self.agents_positional_embedding
+        road_objects = road_objects + self.agents_positional_embedding
         road_objects_attn = self.ro_attn(road_objects)
         
         road_graph = self.road_graph_net(road_graph)
@@ -485,6 +485,7 @@ class WayformerEncoder(LateFusionNet):
     def get_embedded_obs(self, obs, masks=None):
         # TODO: Implement function using mask
         # Unpack observation
+        ego_mask, partner_mask, road_mask = masks
         ego_state, road_objects, road_graph = self._unpack_obs(obs, timestep=self.rollout_len)
         batch_size = obs.shape[0]
         # Embed features
@@ -494,13 +495,18 @@ class WayformerEncoder(LateFusionNet):
         ego_state = ego_state.unsqueeze(2)
         agent_state = torch.cat([ego_state, road_objects], dim=2)
         agent_state = agent_state + self.agents_positional_embedding + self.temporal_positional_embedding
+        
+        ego_mask = ego_mask.unsqueeze(-1)
+        agent_mask = torch.cat([ego_mask, partner_mask], dim=-1)
+        road_mask = road_mask.reshape(batch_size, -1)
+        agent_mask = agent_mask.reshape(batch_size, -1)
 
-        agent_state = ego_state.reshape(batch_size, -1, 64)
+        agent_state = agent_state.reshape(batch_size, -1, 64)
         road_graph = road_graph.reshape(batch_size, -1, 64)
 
         embedding_vector = torch.cat((agent_state, road_graph), dim=1)
-        
-        context = self.encoder(embedding_vector) 
+        embedding_mask = torch.cat((agent_mask, road_mask), dim=1)
+        context = self.encoder(embedding_vector, embedding_mask) 
         context = context.transpose(1, 2)
         context = self.timestep_linear(context)
         context = context.transpose(1, 2)

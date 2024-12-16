@@ -21,7 +21,7 @@ logger.setLevel(logging.INFO)
 def parse_args():
     parser = argparse.ArgumentParser('Select the dynamics model that you use')
     parser.add_argument('--action-type', '-at', type=str, default='continuous', choices=['discrete', 'multi_discrete', 'continuous'],)
-    parser.add_argument('--device', '-d', type=str, default='cuda', choices=['cpu', 'cuda'],)
+    parser.add_argument('--device', '-d', type=str, default='cpu', choices=['cpu', 'cuda'],)
     parser.add_argument('--num-stack', '-s', type=int, default=1)
     
     # MODEL
@@ -33,8 +33,8 @@ def parse_args():
     
     # DATA
     parser.add_argument('--data-path', '-dp', type=str, default='.')
-    parser.add_argument('--train-data-file', '-td', type=str, default='trajectory_0.npz')
-    parser.add_argument('--eval-data-file', '-ed', type=str, default='trajectory_0.npz')
+    parser.add_argument('--train-data-file', '-td', type=str, default='train_trajectory_1000.npz')
+    parser.add_argument('--eval-data-file', '-ed', type=str, default='test_trajectory_200.npz')
     
     # EXPERIMENT
     parser.add_argument('--exp-name', '-en', type=str, default='all_data')
@@ -88,29 +88,16 @@ class ExpertDataset(torch.utils.data.Dataset):
                         data = self.__dict__[var_name][idx1 ,idx2 + self.rollout_len + self.pred_len - 2]
                     else:
                         raise ValueError(f"Not in data {self.full_var}. Your input is {var_name}")
-                    batch = batch + (data, )   
+                    batch = batch + (data, )
+                    if var_name == 'masks':
+                        ego_mask_data = self.__dict__[var_name][idx1, idx2:idx2 + self.rollout_len]
+                        batch = batch + (ego_mask_data, )
         else:
             for var_name in self.full_var:
                 if self.__dict__[var_name] is not None:
                     data = self.__dict__[var_name][idx]
                     batch = batch + (data, )   
         return batch
-    
-def cache_data(data_path, train_file, eval_file, cache_dir='/tmp/data_cache'):
-    """Cache data locally from NAS to reduce I/O overhead."""
-    if not os.path.exists(cache_dir):
-        os.makedirs(cache_dir)
-    train_cache_path = os.path.join(cache_dir, train_file)
-    eval_cache_path = os.path.join(cache_dir, eval_file)
-
-    # Cache train data
-    if not os.path.exists(train_cache_path):
-        shutil.copy(os.path.join(data_path, train_file), train_cache_path)
-    # Cache eval data
-    if not os.path.exists(eval_cache_path):
-        shutil.copy(os.path.join(data_path, eval_file), eval_cache_path)
-
-    return train_cache_path, eval_cache_path
 
 if __name__ == "__main__":
     args = parse_args()
@@ -133,9 +120,7 @@ if __name__ == "__main__":
             torch.linspace(-np.pi, np.pi, 100), decimals=3
         ).to(args.device),
     )
-    train_cache_path, eval_cache_path = cache_data(
-        args.data_path, args.train_data_file, args.eval_data_file
-    )
+
     # Get state action pairs
     train_expert_obs, train_expert_actions = [], []
     eval_expert_obs, eval_expert_actions, = [], []
@@ -146,14 +131,14 @@ if __name__ == "__main__":
     train_road_mask, eval_road_mask = [], []
     
     # Load cached data
-    with np.load(train_cache_path) as npz:
+    with np.load(os.path.join(args.data_path, args.train_data_file)) as npz:
         train_expert_obs = [npz['obs']]
         train_expert_actions = [npz['actions']]
         train_expert_masks = [npz['dead_mask']] if 'dead_mask' in npz.keys() else []
         train_other_info = [npz['other_info']] if 'other_info' in npz.keys() else []
         train_road_mask = [npz['road_mask']] if 'road_mask' in npz.keys() else []
 
-    with np.load(eval_cache_path) as npz:
+    with np.load(os.path.join(args.data_path, args.eval_data_file)) as npz:
         eval_expert_obs = [npz['obs']]
         eval_expert_actions = [npz['actions']]
         eval_expert_masks = [npz['dead_mask']] if 'dead_mask' in npz.keys() else []
@@ -247,20 +232,21 @@ if __name__ == "__main__":
                 break
             total_samples += batch_size
             
-            # Data
-            if len(batch) == 5:
-                obs, expert_action, masks, partner_masks, road_masks = batch 
+            # Data ['obs', 'actions', 'masks', 'ego_mask', 'partner_mask', 'road_mask']
+            if len(batch) == 6:
+                obs, expert_action, masks, ego_masks, partner_masks, road_masks = batch 
             elif len(batch) == 3:
                 obs, expert_action, masks = batch
             else:
                 obs, expert_action = batch
             obs, expert_action = obs.to(args.device), expert_action.to(args.device)
             masks = masks.to(args.device) if len(batch) > 2 else None
+            ego_masks = ego_masks.to(args.device) if len(batch) > 3 else None
             partner_masks = partner_masks.to(args.device) if len(batch) > 3 else None
             road_masks = road_masks.to(args.device) if len(batch) > 3 else None
-            
+            all_masks= [masks, ego_masks, partner_masks, road_masks]
             # Forward pass
-            loss = LOSS[args.loss_name](bc_policy, obs, expert_action, masks)
+            loss = LOSS[args.loss_name](bc_policy, obs, expert_action, all_masks)
             
             # Backward pass
             optimizer.zero_grad()
@@ -268,7 +254,7 @@ if __name__ == "__main__":
             optimizer.step()
 
             with torch.no_grad():
-                pred_actions = bc_policy(obs, masks, deterministic=True)
+                pred_actions = bc_policy(obs, all_masks[1:], deterministic=True)
                 action_loss = torch.abs(pred_actions - expert_action)
                 dx_loss = action_loss[..., 0].mean().item()
                 dy_loss = action_loss[..., 1].mean().item()
@@ -313,11 +299,13 @@ if __name__ == "__main__":
                 obs, expert_action = batch
             obs, expert_action = obs.to(args.device), expert_action.to(args.device)
             masks = masks.to(args.device) if len(batch) > 2 else None
+            ego_masks = ego_masks.to(args.device) if len(batch) > 3 else None
             partner_masks = partner_masks.to(args.device) if len(batch) > 3 else None
             road_masks = road_masks.to(args.device) if len(batch) > 3 else None
+            all_masks= [masks, ego_masks, partner_masks, road_masks]
             
             with torch.no_grad():
-                pred_actions = bc_policy(obs, masks, deterministic=True)
+                pred_actions = bc_policy(obs, all_masks[1:], deterministic=True)
                 action_loss = torch.abs(pred_actions - expert_action)
                 dx_loss = action_loss[..., 0].mean().item()
                 dy_loss = action_loss[..., 1].mean().item()
