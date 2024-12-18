@@ -3,10 +3,10 @@ import logging
 import numpy as np
 import torch
 from torch.optim import Adam
-from torch.utils.data import DataLoader, SubsetRandomSampler
+from torch.utils.data import DataLoader
 import os, sys, torch
 sys.path.append(os.getcwd())
-import wandb, yaml, argparse, shutil
+import wandb, yaml, argparse
 from tqdm import tqdm
 from datetime import datetime
 
@@ -21,7 +21,7 @@ logger.setLevel(logging.INFO)
 def parse_args():
     parser = argparse.ArgumentParser('Select the dynamics model that you use')
     parser.add_argument('--action-type', '-at', type=str, default='continuous', choices=['discrete', 'multi_discrete', 'continuous'],)
-    parser.add_argument('--device', '-d', type=str, default='cpu', choices=['cpu', 'cuda'],)
+    parser.add_argument('--device', '-d', type=str, default='cuda', choices=['cpu', 'cuda'],)
     parser.add_argument('--num-stack', '-s', type=int, default=1)
     
     # MODEL
@@ -32,7 +32,7 @@ def parse_args():
     parser.add_argument('--pred-len', '-pl', type=int, default=5)
     
     # DATA
-    parser.add_argument('--data-path', '-dp', type=str, default='.')
+    parser.add_argument('--data-path', '-dp', type=str, default='/data/tom')
     parser.add_argument('--train-data-file', '-td', type=str, default='train_trajectory_1000.npz')
     parser.add_argument('--eval-data-file', '-ed', type=str, default='test_trajectory_200.npz')
     
@@ -46,6 +46,7 @@ def parse_args():
 class ExpertDataset(torch.utils.data.Dataset):
     def __init__(self, obs, actions, masks=None, other_info=None, road_mask=None,
                  rollout_len=1, pred_len=1):
+        # obs
         self.obs = obs
         obs_pad = np.zeros((obs.shape[0], rollout_len - 1, *obs.shape[2:]), dtype=np.float32)
         self.obs = np.concatenate([obs_pad, self.obs], axis=1)
@@ -255,8 +256,10 @@ if __name__ == "__main__":
             partner_masks = partner_masks.to(args.device) if len(batch) > 3 else None
             road_masks = road_masks.to(args.device) if len(batch) > 3 else None
             all_masks= [masks, ego_masks, partner_masks, road_masks]
+            
             # Forward pass
-            loss = LOSS[args.loss_name](bc_policy, obs, expert_action, all_masks)
+            context = bc_policy.get_embedded_obs(obs, all_masks[1:])
+            loss = LOSS[args.loss_name](bc_policy, context, expert_action, all_masks)
             
             # Backward pass
             optimizer.zero_grad()
@@ -264,7 +267,7 @@ if __name__ == "__main__":
             optimizer.step()
 
             with torch.no_grad():
-                pred_actions = bc_policy(obs, all_masks[1:], deterministic=True)
+                pred_actions = bc_policy.get_action(context, deterministic=True)
                 action_loss = torch.abs(pred_actions - expert_action)
                 dx_loss = action_loss[..., 0].mean().item()
                 dy_loss = action_loss[..., 1].mean().item()
@@ -278,7 +281,6 @@ if __name__ == "__main__":
             # Log training losses
             wandb.log(
                 {   
-                    "train/loss": losses / (i + 1),
                     "train/loss": losses / (i + 1),
                     "train/dx_loss": dx_losses / (i + 1),
                     "train/dy_loss": dy_losses / (i + 1),
@@ -324,8 +326,8 @@ if __name__ == "__main__":
                 dy_losses += dy_loss
                 dyaw_losses += dyaw_loss
                 losses += action_loss.mean().item()
+        
         if args.use_wandb:  
-        # Log evaluation losses
             wandb.log(
                 {
                     "eval/loss": losses / (i + 1) ,

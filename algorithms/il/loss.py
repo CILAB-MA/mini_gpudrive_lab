@@ -4,23 +4,23 @@ from torch.distributions import Normal
 from torch.distributions.multivariate_normal import MultivariateNormal
 import numpy as np
 
-def l1_loss(model, obs, expert_actions, masks=None):
+def l1_loss(model, context, expert_actions, masks=None):
     '''
     compute the l1 loss between the predicted and expert actions
     '''
-    pred_actions = model(obs)
+    pred_actions = model.get_action(context)
     loss = F.smooth_l1_loss(pred_actions, expert_actions)
     return loss
 
-def mse_loss(model, obs, expert_actions, masks=None):
+def mse_loss(model, context, expert_actions, masks=None):
     '''
     Compute the mean squared error loss between the predicted and expert actions
     '''
-    pred_actions = model(obs)
+    pred_actions = model.get_action(context)
     loss = F.mse_loss(pred_actions, expert_actions)
     return loss
 
-def two_hot_loss(model, obs, expert_actions, masks=None):
+def two_hot_loss(model, context, expert_actions, masks=None):
     '''
     Compute the two hot loss between the predicted and expert actions
     '''
@@ -37,7 +37,7 @@ def two_hot_loss(model, obs, expert_actions, masks=None):
         
         return two_hot
     
-    pred = model(obs)
+    pred = model.get_action(context)
     targ = expert_actions
     dx_bins = model.config.dx
     dy_bins = model.config.dy
@@ -63,9 +63,8 @@ def two_hot_loss(model, obs, expert_actions, masks=None):
 
     return total_loss
 
-def nll_loss(model, obs, expert_actions, masks=None):
-    embedding_vector = model.get_embedded_obs(obs)
-    means, log_std = model.head.get_dist_params(embedding_vector)
+def nll_loss(model, context, expert_actions, masks=None):
+    means, log_std = model.head.get_dist_params(context)
     stds = torch.exp(log_std)
 
     gaussian = Normal(means, stds)
@@ -83,13 +82,11 @@ def nll_loss(model, obs, expert_actions, masks=None):
 
     return loss.mean()
 
-def gmm_loss(model, obs, expert_actions, masks=None):
+def gmm_loss(model, context, expert_actions, masks=None):
     '''
     compute the gmm loss between the predicted and expert actions
     '''
-    mask, _, _, _ = masks
-    embedding_vector = model.get_embedded_obs(obs, masks[1:])
-    means, covariances, weights, components = model.head.get_gmm_params(embedding_vector)
+    means, covariances, weights, components = model.head.get_gmm_params(context)
     
     # Rescaling actions and resquash
     expert_actions = expert_actions.unsqueeze(1) if expert_actions.dim() == 2 else expert_actions
@@ -110,5 +107,7 @@ def gmm_loss(model, obs, expert_actions, masks=None):
     log_probs = torch.stack(log_probs, dim=-1)
     weighted_log_probs = log_probs + torch.log(weights + 1e-8) + torch.log(1 - squash_expert_actions**2 + 1e-6).sum(dim=-1, keepdim=True)
     loss = -torch.logsumexp(weighted_log_probs, dim=-1)
+
+    mask, _, _, _ = masks
     loss = loss * mask.unsqueeze(-1)
     return loss.sum() / mask.sum()
