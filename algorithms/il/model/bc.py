@@ -7,92 +7,8 @@ from typing import List
 
 from networks.perm_eq_late_fusion import LateFusionNet
 from algorithms.il.model.bc_utils.wayformer import SelfAttentionBlock, PerceiverEncoder
-from algorithms.il.model.bc_utils.gmm import GMM
+from algorithms.il.model.bc_utils.head import *
 
-class ContHead(nn.Module):
-    def __init__(self, hidden_size, net_arch):
-        super(ContHead, self).__init__()
-        self.dx_head = self._build_out_network(hidden_size, 1, net_arch)
-        self.dy_head = self._build_out_network(hidden_size, 1, net_arch)
-        self.dyaw_head = self._build_out_network(hidden_size, 1, net_arch)
-
-    def _build_out_network(
-        self, input_dim: int, output_dim: int, net_arch: List[int]
-    ):
-        """Create the output network architecture."""
-        layers = []
-        prev_dim = input_dim
-        for layer_dim in net_arch:
-            layers.append(nn.Linear(prev_dim, layer_dim))
-            layers.append(nn.LayerNorm(layer_dim))
-            layers.append(nn.Tanh())
-            layers.append(nn.Dropout(0.0))
-            prev_dim = layer_dim
-
-        # Add final layer
-        layers.append(nn.Linear(prev_dim, output_dim))
-
-        return nn.Sequential(*layers)
-    
-    def forward(self, x, deterministic=None):
-        dx = self.dx_head(x)
-        dy = self.dy_head(x)
-        dyaw = self.dyaw_head(x)
-        actions = torch.cat([dx, dy, dyaw], dim=-1)
-        return actions
-    
-class DistHead(nn.Module):
-    def __init__(self, input_dim, hidden_dim=128, action_dim=3):
-        super(DistHead, self).__init__()
-        self.input_layer = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU()
-        )
-        
-        self.residual_block = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, hidden_dim)
-            ) for _ in range(4)
-        ])
-        
-        self.mean = nn.Linear(hidden_dim, action_dim)
-        self.log_std = nn.Linear(hidden_dim, action_dim)
-    
-    def get_dist_params(self, x):
-        """
-        Get the means, stds of the Dist Head
-        """
-        x = self.input_layer(x)
-        
-        for layer in self.residual_block:
-            residual = x
-            x = layer(x)
-            x += residual
-        
-        mean = self.mean(x)
-        log_std = self.log_std(x)
-        log_std = torch.clamp(log_std, -20, 2)
-        
-        return mean, log_std
-        
-    def forward(self, x, deterministic=None):
-        means, log_std = self.get_dist_params(x)
-        stds = torch.exp(log_std)
-        
-        if deterministic:
-            actions = means
-        else:
-            dist = torch.distributions.Normal(means, stds)
-            actions = dist.rsample()
-
-        squashed_actions = torch.tanh(actions)
-
-        scaled_factor = torch.tensor([6.0, 6.0, np.pi], device=x.device)
-
-        scaled_actions = scaled_factor * squashed_actions
-        return scaled_actions
 
 class ContFeedForward(LateFusionNet):
     def __init__(self,  env_config, exp_config, loss='l1', num_stack=5):
@@ -134,10 +50,14 @@ class ContFeedForward(LateFusionNet):
         """Get the embedded observation."""
         return self.nn(obs)
     
-    def forward(self, obss, mask=None, deterministic=False):
-        """Generate an output from tensor input."""
-        out = self.get_embedded_obs(obss)
-        actions = self.head(out, deterministic)
+    def get_action(self, context, deterministic=False):
+        """Get the action from the context."""
+        return self.head(context, deterministic)
+
+    def forward(self, obs, masks=None, deterministic=False):
+        """Generate an actions by end-to-end network."""
+        context = self.get_embedded_obs(obs)
+        actions = self.get_action(context, deterministic)
         return actions
 
 class LateFusionBCNet(LateFusionNet):
@@ -251,14 +171,17 @@ class LateFusionBCNet(LateFusionNet):
             road_graph.permute(0, 2, 1), kernel_size=self.rg_max
         ).squeeze(-1)
 
-        embedding_vector = torch.cat((ego_state, road_objects, road_graph), dim=1)
-        return embedding_vector
+        context = torch.cat((ego_state, road_objects, road_graph), dim=1)
+        return context
 
-    def forward(self, obss, mask=None, deterministic=False):
-        # Unpack observation
-        embedding_vector = self.get_embedded_obs(obss)
-        actions = self.head(embedding_vector, deterministic)
-        
+    def get_action(self, context, deterministic=False):
+        """Get the action from the context."""
+        return self.head(context, deterministic)
+
+    def forward(self, obs, masks=None, deterministic=False):
+        """Generate an actions by end-to-end network."""
+        context = self.get_embedded_obs(obs)
+        actions = self.get_action(context, deterministic)
         return actions
     
 class LateFusionAttnBCNet(LateFusionNet):
@@ -402,10 +325,14 @@ class LateFusionAttnBCNet(LateFusionNet):
         embedding_vector = torch.cat((ego_state, road_objects, road_graph), dim=1)
         return embedding_vector
 
-    def forward(self, obss, mask=None, deterministic=False, attn_weights=False):
-        embedding_vector = self.get_embedded_obs(obss)
-        actions = self.head(embedding_vector, deterministic)
-        
+    def get_action(self, context, deterministic=False):
+        """Get the action from the context."""
+        return self.head(context, deterministic)
+
+    def forward(self, obs, masks=None, attn_weights=False, deterministic=False):
+        """Generate an actions by end-to-end network."""
+        context = self.get_embedded_obs(obs)
+        actions = self.get_action(context, deterministic)
         return actions
 
 class WayformerEncoder(LateFusionNet):
@@ -513,8 +440,12 @@ class WayformerEncoder(LateFusionNet):
 
         return context    
 
-    def forward(self, obss, mask, deterministic=False):
-        context = self.get_embedded_obs(obss, mask)
+    def get_action(self, context, deterministic=False):
+        """Get the action from the context."""
+        return self.head(context, deterministic)
+
+    def forward(self, obs, masks=None, deterministic=False):
+        """Generate an actions by end-to-end network."""
+        context = self.get_action(obs, masks)
         actions = self.head(context, deterministic)
-        
         return actions
