@@ -21,18 +21,18 @@ logger.setLevel(logging.INFO)
 def parse_args():
     parser = argparse.ArgumentParser('Select the dynamics model that you use')
     parser.add_argument('--action-type', '-at', type=str, default='continuous', choices=['discrete', 'multi_discrete', 'continuous'],)
-    parser.add_argument('--device', '-d', type=str, default='cpu', choices=['cpu', 'cuda'],)
+    parser.add_argument('--device', '-d', type=str, default='cuda', choices=['cpu', 'cuda'],)
     parser.add_argument('--num-stack', '-s', type=int, default=1)
     
     # MODEL
     parser.add_argument('--model-path', '-mp', type=str, default='/data/model')
     parser.add_argument('--model-name', '-m', type=str, default='wayformer', choices=['bc', 'late_fusion', 'attention', 'wayformer'])
     parser.add_argument('--loss-name', '-l', type=str, default='gmm', choices=['l1', 'mse', 'twohot', 'nll', 'gmm'])
-    parser.add_argument('--rollout-len', '-rl', type=int, default=1)
-    parser.add_argument('--pred-len', '-pl', type=int, default=1)
+    parser.add_argument('--rollout-len', '-rl', type=int, default=10)
+    parser.add_argument('--pred-len', '-pl', type=int, default=5)
     
     # DATA
-    parser.add_argument('--data-path', '-dp', type=str, default='.')
+    parser.add_argument('--data-path', '-dp', type=str, default='/data/tom')
     parser.add_argument('--train-data-file', '-td', type=str, default='train_trajectory_1000.npz')
     parser.add_argument('--eval-data-file', '-ed', type=str, default='test_trajectory_200.npz')
     
@@ -281,7 +281,6 @@ if __name__ == "__main__":
             # Log training losses
             wandb.log(
                 {   
-                    "train/loss": losses / (i + 1),
                     "train/loss": losses / (i + 1),
                     "train/dx_loss": dx_losses / (i + 1),
                     "train/dy_loss": dy_losses / (i + 1),

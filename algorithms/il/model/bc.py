@@ -446,6 +446,6 @@ class WayformerEncoder(LateFusionNet):
 
     def forward(self, obs, masks=None, deterministic=False):
         """Generate an actions by end-to-end network."""
-        context = self.get_action(obs, masks)
-        actions = self.head(context, deterministic)
+        context = self.get_embedded_obs(obs, masks)
+        actions = self.get_action(context, deterministic)
         return actions
