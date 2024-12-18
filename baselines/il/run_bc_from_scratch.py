@@ -51,11 +51,11 @@ class ExpertDataset(torch.utils.data.Dataset):
         self.obs = np.concatenate([obs_pad, self.obs], axis=1)
         self.masks = 1 - masks
         dead_masks_pad = np.ones((self.masks.shape[0], rollout_len - 1, *self.masks.shape[2:]), dtype=np.float32)
-        self.masks = np.concatenate([dead_masks_pad, self.masks], axis=1)
+        self.masks = np.concatenate([dead_masks_pad, self.masks], axis=1).astype('bool')
 
         self.road_mask = road_mask
         road_mask_pad = np.zeros((road_mask.shape[0], rollout_len - 1, *road_mask.shape[2:]), dtype=np.float32)
-        self.road_mask = np.concatenate([road_mask_pad, self.road_mask], axis=1)
+        self.road_mask = np.concatenate([road_mask_pad, self.road_mask], axis=1).astype('bool')
         
         self.actions = actions
         self.other_info = other_info
@@ -66,7 +66,7 @@ class ExpertDataset(torch.utils.data.Dataset):
 
         self.partner_mask = other_info[..., -1]
         partner_mask_pad = np.zeros((self.partner_mask.shape[0], rollout_len - 1, *self.partner_mask.shape[2:]), dtype=np.float32)
-        self.partner_mask = np.concatenate([partner_mask_pad, self.partner_mask], axis=1)
+        self.partner_mask = np.concatenate([partner_mask_pad, self.partner_mask], axis=1).astype('bool')
         if self.masks is not None:
             self.use_mask = True
         self.valid_indices = self._compute_valid_indices()
@@ -87,8 +87,6 @@ class ExpertDataset(torch.utils.data.Dataset):
         # row, column -> 
         batch = ()
         if self.num_timestep > 1:
-            idx1 = idx // self.num_timestep
-            idx2 = idx % self.num_timestep
             for var_name in self.full_var:
                 if self.__dict__[var_name] is not None:
                     if var_name in ['obs', 'road_mask', 'partner_mask']:
@@ -303,8 +301,8 @@ if __name__ == "__main__":
             total_samples += batch_size
             
             # Data #todo: add other info
-            if len(batch) == 5:
-                obs, expert_action, masks, partner_masks, road_masks = batch 
+            if len(batch) == 6:
+                obs, expert_action, masks, ego_masks, partner_masks, road_masks = batch  
             elif len(batch) == 3:
                 obs, expert_action, masks = batch
             else:
